@@ -1,0 +1,14 @@
+{
+  "name": "A_EXTRACT_ACTIONS",
+  "version": "1.0.0",
+  "description": "Extract operator action items from repo activity using rule-based pattern matching",
+  "input": {
+    "repoActivity": { "type": "array", "required": true },
+    "blueprintStatus": { "type": "object" }
+  },
+  "output": {
+    "operatorActions": { "type": "array" }
+  },
+  "requires": [],
+  "tags": ["actions", "operator", "digest"]
+}

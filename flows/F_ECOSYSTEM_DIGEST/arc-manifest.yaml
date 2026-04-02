@@ -1,0 +1,20 @@
+schema: arc/v1
+name: F_ECOSYSTEM_DIGEST
+version: 1.0.0
+type: pipeline
+author:
+  name: metafactory
+  github: the-metafactory
+provides:
+  pipeline:
+    definition: pipeline.yaml
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network:
+    - domain: "api.anthropic.com"
+      reason: "LLM inference for summarization"
+  bash:
+    allowed: true
+  secrets: []

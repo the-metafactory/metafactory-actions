@@ -1,0 +1,11 @@
+{
+  "name": "A_BLUEPRINT_STATUS",
+  "version": "1.0.0",
+  "description": "Run blueprint status to get current feature health across the ecosystem",
+  "input": {},
+  "output": {
+    "blueprintHealth": { "type": "object" }
+  },
+  "requires": ["shell"],
+  "tags": ["blueprint", "status", "health"]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "A_RANK_WORK",
+  "version": "1.0.0",
+  "description": "Score and rank work items by label priority, dependency order, and type. LLM synthesizes final pick.",
+  "input": {
+    "workItems": { "type": "array", "required": true }
+  },
+  "output": {
+    "rankedItems": { "type": "array" },
+    "topPick": { "type": "object" },
+    "reasoning": { "type": "string" }
+  },
+  "requires": ["llm"],
+  "tags": ["ranking", "prioritization", "llm", "metafactory"]
+}

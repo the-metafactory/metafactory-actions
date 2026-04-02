@@ -1,0 +1,15 @@
+{
+  "name": "A_FETCH_REPOS",
+  "version": "1.0.0",
+  "description": "Fetch recent GitHub activity across all metafactory repos (commits, PRs, issues)",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true },
+    "sinceDays": { "type": "number" }
+  },
+  "output": {
+    "repoActivity": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["github", "fetch", "metafactory"]
+}

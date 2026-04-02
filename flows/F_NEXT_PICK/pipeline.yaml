@@ -1,0 +1,7 @@
+name: P_NEXT_PICK
+description: "Discover repos → gather all open work → score and rank → format top pick with reasoning"
+actions:
+  - A_DISCOVER_REPOS
+  - A_GATHER_WORK
+  - A_RANK_WORK
+  - A_FORMAT_PICK

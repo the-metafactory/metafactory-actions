@@ -1,0 +1,17 @@
+schema: arc/v1
+name: A_EXTRACT_ARTICLE
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network:
+    - domain: "*"
+      reason: "HTTP fetch for article extraction"
+  bash:
+    allowed: false
+  secrets: []

@@ -1,0 +1,14 @@
+{
+  "name": "A_ARC_UPGRADE",
+  "version": "1.0.0",
+  "description": "Run arc upgrade for all metafactory repos that have an arc-manifest.yaml",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true }
+  },
+  "output": {
+    "upgradeResults": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["arc", "upgrade", "metafactory"]
+}

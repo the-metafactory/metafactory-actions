@@ -1,0 +1,7 @@
+name: P_RSS_DIGEST
+description: "Fetch RSS feed → Extract articles → Rate with LLM → Recommend top picks"
+actions:
+  - A_FETCH_FEED
+  - A_EXTRACT_ARTICLE
+  - A_RATE
+  - A_RECOMMEND

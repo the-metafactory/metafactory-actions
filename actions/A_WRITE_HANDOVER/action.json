@@ -1,0 +1,16 @@
+{
+  "name": "A_WRITE_HANDOVER",
+  "version": "1.0.0",
+  "description": "LLM writes a structured handover document from collected work and open threads",
+  "input": {
+    "workDone": { "type": "array", "required": true },
+    "openThreads": { "type": "object", "required": true },
+    "author": { "type": "string", "required": true },
+    "recipient": { "type": "string" }
+  },
+  "output": {
+    "handover": { "type": "string" }
+  },
+  "requires": ["llm"],
+  "tags": ["llm", "handover", "summary"]
+}

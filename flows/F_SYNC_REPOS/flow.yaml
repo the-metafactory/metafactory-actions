@@ -1,0 +1,7 @@
+name: F_SYNC_REPOS
+description: "Pull latest changes for all metafactory repos, clone any new ones"
+source:
+  type: inline
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

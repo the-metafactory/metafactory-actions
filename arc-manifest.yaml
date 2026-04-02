@@ -1,0 +1,67 @@
+schema: arc/v1
+name: metafactory-actions
+version: 1.0.0
+type: library
+description: Shared actions and flows for the metafactory ecosystem
+author:
+  name: metafactory
+  github: the-metafactory
+artifacts:
+  # Actions
+  - path: actions/A_DISCOVER_REPOS
+    description: Discover all repos in the-metafactory GitHub org
+  - path: actions/A_FETCH_REPOS
+    description: Fetch recent GitHub activity across repos
+  - path: actions/A_GATHER_WORK
+    description: Gather open work items from GitHub issues, PRs, and blueprints
+  - path: actions/A_RANK_WORK
+    description: Score and rank work items, LLM selects best next task
+  - path: actions/A_FORMAT_PICK
+    description: Format top pick with reasoning for display
+  - path: actions/A_CHECK_BLUEPRINT
+    description: Check blueprint feature status across ecosystem
+  - path: actions/A_BLUEPRINT_STATUS
+    description: Run blueprint CLI to get feature health
+  - path: actions/A_EXTRACT_ACTIONS
+    description: Extract operator action items from repo activity
+  - path: actions/A_SUMMARIZE_DIGEST
+    description: LLM-summarize ecosystem activity into daily digest
+  - path: actions/A_FORMAT_DISCORD
+    description: Format digest as Discord message and post
+  - path: actions/A_ARC_UPGRADE
+    description: Run arc upgrade for repos with arc-manifest.yaml
+  - path: actions/A_FORMAT_UPGRADE
+    description: Format arc upgrade results as readable digest
+  - path: actions/A_SYNC_REPOS
+    description: Pull latest changes for all metafactory repos
+  - path: actions/A_FORMAT_SYNC
+    description: Format sync results as readable digest
+  - path: actions/A_FETCH_FEED
+    description: Fetch and parse an RSS feed into items
+  - path: actions/A_EXTRACT_ARTICLE
+    description: Extract article content from feed item URLs
+  - path: actions/A_RATE
+    description: Rate articles for relevance using LLM
+  - path: actions/A_RECOMMEND
+    description: Rank rated articles into recommendation digest
+  - path: actions/A_COLLECT_WORK
+    description: Collect work items for timezone handover
+  - path: actions/A_GATHER_THREADS
+    description: Gather active discussion threads for handover
+  - path: actions/A_WRITE_HANDOVER
+    description: Write handover digest using LLM
+  - path: actions/A_DELIVER
+    description: Deliver handover to Discord/Slack
+  # Flows
+  - path: flows/F_NEXT_PICK
+    description: Scan repos and blueprints, rank work, select best next task
+  - path: flows/F_ECOSYSTEM_DIGEST
+    description: Daily ecosystem digest — GitHub activity + blueprint → Discord
+  - path: flows/F_HANDOVER_DIGEST
+    description: Timezone handover — collect work + threads → digest → deliver
+  - path: flows/F_ARC_UPGRADE
+    description: Run arc upgrade across all metafactory repos
+  - path: flows/F_SYNC_REPOS
+    description: Pull latest for all metafactory repos, clone new ones
+  - path: flows/F_RSS_PIPELINE
+    description: Fetch RSS → extract articles → rate → recommend

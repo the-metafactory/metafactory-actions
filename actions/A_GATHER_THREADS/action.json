@@ -1,0 +1,15 @@
+{
+  "name": "A_GATHER_THREADS",
+  "version": "1.0.0",
+  "description": "Gather open threads — PRs awaiting review, in-progress issues, blockers needing decisions",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true },
+    "author": { "type": "string", "required": true }
+  },
+  "output": {
+    "openThreads": { "type": "object" }
+  },
+  "requires": ["shell"],
+  "tags": ["github", "threads", "review", "handover"]
+}

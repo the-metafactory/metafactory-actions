@@ -1,0 +1,7 @@
+name: F_NEXT_PICK
+description: "Scan all metafactory repos + blueprints for open work, rank by importance, select the single best thing to work on next"
+source:
+  type: inline
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

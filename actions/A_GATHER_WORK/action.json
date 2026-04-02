@@ -1,0 +1,14 @@
+{
+  "name": "A_GATHER_WORK",
+  "version": "1.0.0",
+  "description": "Gather all open work items: GitHub issues, PRs, handovers, and blueprint features across all repos",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true }
+  },
+  "output": {
+    "workItems": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["github", "blueprint", "gather", "metafactory"]
+}

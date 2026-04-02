@@ -1,0 +1,6 @@
+name: P_ARC_UPGRADE
+description: "Discover → Upgrade arc packages → Format results"
+actions:
+  - A_DISCOVER_REPOS
+  - A_ARC_UPGRADE
+  - A_FORMAT_UPGRADE

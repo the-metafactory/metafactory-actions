@@ -1,0 +1,16 @@
+{
+  "name": "A_FORMAT_PICK",
+  "version": "1.0.0",
+  "description": "Format the top pick with reasoning for stdout display",
+  "input": {
+    "topPick": { "type": "object", "required": true },
+    "reasoning": { "type": "string", "required": true },
+    "suggestedFirstStep": { "type": "string" },
+    "totalCandidates": { "type": "number" }
+  },
+  "output": {
+    "digest": { "type": "string" }
+  },
+  "requires": [],
+  "tags": ["format", "output", "metafactory"]
+}

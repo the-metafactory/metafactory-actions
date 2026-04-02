@@ -1,0 +1,16 @@
+{
+  "name": "A_SUMMARIZE_DIGEST",
+  "version": "1.0.0",
+  "description": "Use LLM to summarize ecosystem activity into a concise daily digest",
+  "input": {
+    "repoActivity": { "type": "array", "required": true },
+    "blueprintStatus": { "type": "object", "required": true }
+  },
+  "output": {
+    "summary": { "type": "string" },
+    "highlights": { "type": "array" },
+    "blockers": { "type": "array" }
+  },
+  "requires": ["llm"],
+  "tags": ["llm", "summary", "digest"]
+}

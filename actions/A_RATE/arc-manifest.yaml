@@ -1,0 +1,17 @@
+schema: arc/v1
+name: A_RATE
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network:
+    - domain: "api.anthropic.com"
+      reason: "LLM inference"
+  bash:
+    allowed: false
+  secrets: []

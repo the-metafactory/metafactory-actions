@@ -1,0 +1,6 @@
+name: P_SYNC_REPOS
+description: "Discover → Pull/Clone → Format results"
+actions:
+  - A_DISCOVER_REPOS
+  - A_SYNC_REPOS
+  - A_FORMAT_SYNC

@@ -1,0 +1,13 @@
+{
+  "name": "A_RATE",
+  "version": "1.0.0",
+  "description": "Rate articles for relevance and quality using LLM",
+  "input": {
+    "articles": { "type": "array", "required": true }
+  },
+  "output": {
+    "rated": { "type": "array" }
+  },
+  "requires": ["llm"],
+  "tags": ["rate", "score", "llm"]
+}

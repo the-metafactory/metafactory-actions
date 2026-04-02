@@ -1,0 +1,14 @@
+{
+  "name": "A_RECOMMEND",
+  "version": "1.0.0",
+  "description": "Rank rated articles and produce a recommendation digest",
+  "input": {
+    "rated": { "type": "array", "required": true }
+  },
+  "output": {
+    "digest": { "type": "string" },
+    "topPicks": { "type": "array" }
+  },
+  "requires": [],
+  "tags": ["recommend", "rank", "digest"]
+}

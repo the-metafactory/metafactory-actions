@@ -1,0 +1,7 @@
+name: F_ECOSYSTEM_DIGEST
+description: "Daily metafactory ecosystem digest — GitHub activity + blueprint status → LLM summary → Discord"
+source:
+  type: inline
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

@@ -1,0 +1,7 @@
+name: F_ARC_UPGRADE
+description: "Run arc upgrade for all metafactory repos with an arc-manifest.yaml"
+source:
+  type: inline
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

@@ -1,0 +1,13 @@
+{
+  "name": "A_FORMAT_UPGRADE",
+  "version": "1.0.0",
+  "description": "Format arc upgrade results as a readable digest",
+  "input": {
+    "upgradeResults": { "type": "array", "required": true }
+  },
+  "output": {
+    "digest": { "type": "string" }
+  },
+  "requires": [],
+  "tags": ["format", "metafactory"]
+}

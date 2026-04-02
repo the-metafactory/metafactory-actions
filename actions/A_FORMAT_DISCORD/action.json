@@ -1,0 +1,16 @@
+{
+  "name": "A_FORMAT_DISCORD",
+  "version": "1.0.0",
+  "description": "Format the digest as a Discord message and post it",
+  "input": {
+    "summary": { "type": "string", "required": true },
+    "highlights": { "type": "array", "required": true },
+    "blockers": { "type": "array" }
+  },
+  "output": {
+    "digest": { "type": "string" },
+    "posted": { "type": "boolean" }
+  },
+  "requires": ["shell"],
+  "tags": ["discord", "format", "notify"]
+}

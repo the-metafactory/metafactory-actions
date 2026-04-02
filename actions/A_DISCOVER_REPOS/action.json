@@ -1,0 +1,13 @@
+{
+  "name": "A_DISCOVER_REPOS",
+  "version": "1.0.0",
+  "description": "Dynamically discover all repos in the-metafactory GitHub org",
+  "input": {
+    "org": { "type": "string" }
+  },
+  "output": {
+    "repos": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["github", "discovery", "metafactory"]
+}

@@ -1,0 +1,13 @@
+{
+  "name": "A_EXTRACT_ARTICLE",
+  "version": "1.0.0",
+  "description": "Extract article content from feed items by fetching linked pages",
+  "input": {
+    "items": { "type": "array", "required": true }
+  },
+  "output": {
+    "articles": { "type": "array" }
+  },
+  "requires": ["fetch"],
+  "tags": ["extract", "article", "content"]
+}

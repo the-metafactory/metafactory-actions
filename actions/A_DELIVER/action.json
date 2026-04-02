@@ -1,0 +1,16 @@
+{
+  "name": "A_DELIVER",
+  "version": "1.0.0",
+  "description": "Post handover to Discord and save to handovers directory",
+  "input": {
+    "handover": { "type": "string", "required": true },
+    "author": { "type": "string", "required": true },
+    "handoverDate": { "type": "string", "required": true }
+  },
+  "output": {
+    "filePath": { "type": "string" },
+    "postedToDiscord": { "type": "boolean" }
+  },
+  "requires": ["shell", "writeFile"],
+  "tags": ["discord", "file", "deliver", "handover"]
+}

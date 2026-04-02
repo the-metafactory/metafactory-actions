@@ -1,0 +1,7 @@
+name: F_HANDOVER_DIGEST
+description: "Timezone handover — collect work done + gather open threads → write structured handover → deliver to Discord + file"
+source:
+  type: inline
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

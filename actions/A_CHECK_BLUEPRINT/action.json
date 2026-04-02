@@ -1,0 +1,13 @@
+{
+  "name": "A_CHECK_BLUEPRINT",
+  "version": "1.0.0",
+  "description": "Check blueprint status — what features are ready, blocked, or in progress",
+  "input": {
+    "repoActivity": { "type": "array", "required": true }
+  },
+  "output": {
+    "blueprintStatus": { "type": "object" }
+  },
+  "requires": ["shell"],
+  "tags": ["blueprint", "status", "metafactory"]
+}

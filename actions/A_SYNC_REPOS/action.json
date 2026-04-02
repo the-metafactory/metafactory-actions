@@ -1,0 +1,14 @@
+{
+  "name": "A_SYNC_REPOS",
+  "version": "1.0.0",
+  "description": "Pull latest changes for all metafactory repos, clone any new ones",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true }
+  },
+  "output": {
+    "syncResults": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["git", "sync", "metafactory"]
+}

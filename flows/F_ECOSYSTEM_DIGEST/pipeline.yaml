@@ -1,0 +1,7 @@
+name: P_ECOSYSTEM_DIGEST
+description: "Fetch activity across all metafactory repos, check blueprint status, summarize with LLM, format for Discord"
+actions:
+  - A_FETCH_REPOS
+  - A_CHECK_BLUEPRINT
+  - A_SUMMARIZE_DIGEST
+  - A_FORMAT_DISCORD

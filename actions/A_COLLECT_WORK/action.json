@@ -1,0 +1,16 @@
+{
+  "name": "A_COLLECT_WORK",
+  "version": "1.0.0",
+  "description": "Collect git commits, merged PRs, and closed issues from the last work session across all repos",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true },
+    "author": { "type": "string", "required": true },
+    "hoursBack": { "type": "number" }
+  },
+  "output": {
+    "workDone": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["git", "github", "collect", "handover"]
+}

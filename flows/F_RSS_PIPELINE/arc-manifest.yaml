@@ -1,0 +1,22 @@
+schema: arc/v1
+name: F_RSS_PIPELINE
+version: 1.0.0
+type: pipeline
+author:
+  name: metafactory
+  github: the-metafactory
+provides:
+  pipeline:
+    definition: pipeline.yaml
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network:
+    - domain: "*"
+      reason: "HTTP fetch for RSS feeds and articles"
+    - domain: "api.anthropic.com"
+      reason: "LLM inference for article rating"
+  bash:
+    allowed: false
+  secrets: []

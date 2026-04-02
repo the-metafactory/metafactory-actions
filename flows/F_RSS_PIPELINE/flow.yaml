@@ -1,0 +1,7 @@
+name: F_RSS_PIPELINE
+description: "Fetch RSS feed → extract article content → rate with LLM → produce recommendation digest"
+source:
+  type: inline
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

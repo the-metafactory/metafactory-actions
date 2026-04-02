@@ -1,0 +1,15 @@
+{
+  "name": "A_FETCH_FEED",
+  "version": "1.0.0",
+  "description": "Fetch and parse an RSS feed into items",
+  "input": {
+    "feedUrl": { "type": "string", "required": true },
+    "limit": { "type": "number" }
+  },
+  "output": {
+    "items": { "type": "array" },
+    "feedTitle": { "type": "string" }
+  },
+  "requires": ["fetch"],
+  "tags": ["rss", "feed", "fetch"]
+}

@@ -1,0 +1,7 @@
+name: P_HANDOVER
+description: "Collect work done → gather open threads → write structured handover → deliver to Discord + file"
+actions:
+  - A_COLLECT_WORK
+  - A_GATHER_THREADS
+  - A_WRITE_HANDOVER
+  - A_DELIVER
