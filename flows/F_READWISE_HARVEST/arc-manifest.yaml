@@ -1,0 +1,18 @@
+schema: arc/v1
+name: F_READWISE_HARVEST
+version: 1.0.0
+type: pipeline
+author:
+  name: metafactory
+  github: the-metafactory
+provides:
+  pipeline:
+    definition: pipeline.yaml
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network: []
+  bash:
+    allowed: true
+  secrets: []

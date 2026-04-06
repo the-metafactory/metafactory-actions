@@ -1,0 +1,17 @@
+schema: arc/v1
+name: A_EVALUATE_CANDIDATES
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network:
+    - domain: api.anthropic.com
+      reason: LLM evaluation of feed candidates
+  bash:
+    allowed: false
+  secrets: []

@@ -1,0 +1,15 @@
+schema: arc/v1
+name: A_ADD_TO_SIFT
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network: []
+  bash:
+    allowed: true
+  secrets: []
