@@ -16,7 +16,7 @@ export default {
     const { urls, ...upstream } = input;
     const shell = ctx.capabilities.shell!;
 
-    const result = await shell("sift sources --json -n 500");
+    const result = await shell("sift catalog --all --json");
     if (result.code !== 0) {
       throw new Error(`sift sources failed: ${result.stderr}`);
     }
