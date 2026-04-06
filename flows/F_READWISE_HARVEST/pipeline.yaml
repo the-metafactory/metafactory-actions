@@ -1,8 +1,0 @@
-name: P_NEWSLETTER_HARVEST
-description: "Fetch newsletter → extract URLs → cross-reference sift → evaluate candidates → add to sift"
-actions:
-  - A_FETCH_NEWSLETTER
-  - A_EXTRACT_URLS
-  - A_CROSSREF_SIFT
-  - A_EVALUATE_CANDIDATES
-  - A_ADD_TO_SIFT

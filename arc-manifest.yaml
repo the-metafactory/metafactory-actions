@@ -1,6 +1,6 @@
 schema: arc/v1
 name: metafactory-actions
-version: 1.1.0
+version: 1.2.0
 type: library
 description: Shared actions and flows for the metafactory ecosystem
 author:
@@ -52,17 +52,6 @@ artifacts:
     description: Write handover digest using LLM
   - path: actions/A_DELIVER
     description: Deliver handover to Discord/Slack
-  # Harvest actions (newsletter → sift)
-  - path: actions/A_FETCH_NEWSLETTER
-    description: Fetch latest newsletter email via CLI — configurable query and sender
-  - path: actions/A_EXTRACT_URLS
-    description: Extract and deduplicate URLs from email body text
-  - path: actions/A_CROSSREF_SIFT
-    description: Cross-reference URLs against existing sift sources
-  - path: actions/A_EVALUATE_CANDIDATES
-    description: LLM-evaluate URL candidates for feed-worthiness
-  - path: actions/A_ADD_TO_SIFT
-    description: Add approved feeds to sift with topic assignment
   # Flows
   - path: flows/F_NEXT_PICK
     description: Scan repos and blueprints, rank work, select best next task
@@ -76,7 +65,3 @@ artifacts:
     description: Pull latest for all metafactory repos, clone new ones
   - path: flows/F_RSS_PIPELINE
     description: Fetch RSS → extract articles → rate → recommend
-  - path: flows/F_UL_HARVEST
-    description: Harvest UL newsletter → extract URLs → evaluate → add to sift
-  - path: flows/F_READWISE_HARVEST
-    description: Harvest Wisereads newsletter → extract URLs → evaluate → add to sift

@@ -1,9 +1,0 @@
-name: F_READWISE_HARVEST
-description: "Harvest Wisereads/Readwise newsletter for new sift feed candidates"
-source:
-  type: inline
-destination:
-  type: stdout
-pipeline: ./pipeline.yaml
-input:
-  searchQuery: "wisereads"
