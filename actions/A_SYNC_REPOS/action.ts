@@ -31,7 +31,7 @@ export default {
       if (exists.stdout.trim() === "yes") {
         // Pull latest
         const result = await shell(
-          `cd "${repoPath}" && git fetch --prune 2>&1 && git pull --rebase 2>&1 || echo "PULL_FAILED"`
+          `cd "${repoPath}" && git fetch --prune 2>&1 && git pull --rebase --autostash 2>&1 || echo "PULL_FAILED"`
         );
         const output = result.stdout.trim();
         const failed = output.includes("PULL_FAILED") || output.includes("CONFLICT");

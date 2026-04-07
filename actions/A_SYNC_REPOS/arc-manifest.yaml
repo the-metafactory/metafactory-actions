@@ -1,6 +1,6 @@
 schema: arc/v1
 name: A_SYNC_REPOS
-version: 1.0.0
+version: 1.0.1
 type: action
 author:
   name: metafactory
