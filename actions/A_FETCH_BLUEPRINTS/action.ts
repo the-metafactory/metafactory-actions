@@ -26,7 +26,11 @@ const STATUS_LINE = /^\s+status:\s+(\w+)/;
 const NAME_LINE = /^\s+name:\s*(?:"([^"]*)"|(.+))$/;
 const ISSUE_LINE = /^\s+issue:\s+(\d+)/;
 const ITERATION_LINE = /^\s+iteration:\s+(\d+)/;
-const REPO_LINE = /^repo:\s+([A-Za-z0-9_-]+)/;
+// Multi-line flag is required: `repo:` is on line 2 of every blueprint
+// (line 1 is `schema: blueprint/v1`). Without `m` the `^` anchor only
+// matches start-of-string and the regex never fires — falling back
+// silently to the directory name. (Holly review #5)
+const REPO_LINE = /^repo:\s+([A-Za-z0-9_-]+)/m;
 
 function parseBlueprint(yamlText: string, fallbackRepo: string): { repo: string; features: Feature[] } {
   const lines = yamlText.split("\n");
@@ -88,11 +92,14 @@ function finalize(p: Partial<Feature>, repo: string): Feature {
   };
 }
 
-function prefixesFromIds(ids: string[]): string[] {
+export function prefixesFromIds(ids: string[]): string[] {
   const set = new Set<string>();
   for (const id of ids) {
-    // Capture prefix up to last dash before final numeric run, e.g. "F3-309" → "F3-", "S1-01" → "S1-", "DD-90" → "DD-"
-    const m = id.match(/^([A-Za-z]+\d?)-/);
+    // Capture prefix up to last dash before final numeric run, e.g.
+    // "F3-309" → "F3-", "S1-01" → "S1-", "DD-90" → "DD-", "F12-309" → "F12-".
+    // `\d*` (not `\d?`) — single-char digit count would collapse double-digit
+    // iteration prefixes (F12-... → F1-) and miscategorize. (Holly review #5)
+    const m = id.match(/^([A-Za-z]+\d*)-/);
     if (m) set.add(m[1] + "-");
   }
   return [...set].sort((a, b) => b.length - a.length);
@@ -117,14 +124,25 @@ export default {
 
     // Load canonical repo allowlist from compass/ecosystem/repos.yaml.
     // Filters out alternate clones / worktrees / experimental forks at devRoot.
+    // Fail-closed: if the registry can't be read or yields no entries we
+    // throw rather than silently treating every blueprint as canonical
+    // (which would re-introduce the bug A_FETCH_BLUEPRINTS exists to avoid).
+    // (Holly review #5)
     const regPath = registryPath || `${root}/compass/ecosystem/repos.yaml`;
     const allowlist = new Set<string>();
-    const reg = await shell(`test -f ${regPath} && cat ${regPath} || true`);
+    const reg = await shell(`cat ${regPath} 2>/dev/null`);
     if (reg.stdout) {
       // Match top-level repo keys: 2-space indent followed by name and colon
       const repoKey = /^  ([A-Za-z0-9][A-Za-z0-9_-]*):\s*$/gm;
       let m: RegExpExecArray | null;
       while ((m = repoKey.exec(reg.stdout)) !== null) allowlist.add(m[1]);
+    }
+    if (allowlist.size === 0) {
+      throw new Error(
+        `A_FETCH_BLUEPRINTS: failed to load canonical repo allowlist from ${regPath}. ` +
+          `Pass an explicit registryPath, or check the file exists with the expected ` +
+          `2-space-indented \`name:\` keys under a top-level \`repos:\` section.`
+      );
     }
 
     // Find blueprint.yaml files at depth 2 (devRoot/<repo>/blueprint.yaml)
@@ -142,14 +160,19 @@ export default {
       const dir = path.replace("/blueprint.yaml", "");
       const repoName = dir.replace(`${root}/`, "");
 
-      // If a canonical allowlist was loaded, restrict to it (filters alternate clones / forks)
-      if (allowlist.size > 0 && !allowlist.has(repoName)) continue;
+      // Restrict to canonical allowlist (filters alternate clones / forks /
+      // experimental dirs at devRoot). Allowlist guaranteed non-empty above.
+      if (!allowlist.has(repoName)) continue;
 
-      // Filter out worktree pointers — only include canonical repos where
-      // the directory itself is the git top-level (not a linked worktree)
-      const top = await shell(`git -C ${dir} rev-parse --show-toplevel 2>/dev/null`);
-      const topPath = top.stdout.trim();
-      if (!topPath || topPath !== dir) continue;
+      // Defense-in-depth: skip linked worktrees. A linked worktree has a
+      // `.git` *file* (containing `gitdir: ...`), whereas a canonical
+      // checkout has a `.git` *directory*. `rev-parse --show-toplevel`
+      // can't distinguish the two — inside a linked worktree it returns
+      // the linked dir itself. (Holly review #5)
+      const gitTest = await shell(
+        `if [ -d "${dir}/.git" ]; then echo dir; elif [ -f "${dir}/.git" ]; then echo file; else echo none; fi`
+      );
+      if (gitTest.stdout.trim() !== "dir") continue;
 
       const cat = await shell(`cat ${path}`);
       const { repo, features: feats } = parseBlueprint(cat.stdout, repoName);

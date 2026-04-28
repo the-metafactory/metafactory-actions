@@ -21,12 +21,30 @@ interface PRRef {
   ids: string[];
 }
 
-function extractIds(title: string, prefixes: string[]): string[] {
+export function extractIds(title: string, prefixes: string[]): string[] {
+  // Match by LETTER-FAMILY (not exact prefix). For each registered
+  // prefix `X<digits>-`, derive the letters `X`; accept any digit-count
+  // variant `X\d*-\d+`. This addresses Holly review #5 fix #4: PR title
+  // `F5-501` is extracted even when the registered set is `["F-"]`,
+  // so A_DETECT_DRIFT gets a chance to fuzzy-normalize and match against
+  // F5-501 in blueprint. Stays repo-scoped (no generic catch-all
+  // false-positive flood from SHA-256, SOP-*, INC-*, T-*, FR-*, HL-*,
+  // CP-*, etc. that aren't blueprint feature IDs).
   if (!prefixes.length) return [];
-  // Build alternation; longest first to avoid partial matches
-  const alt = prefixes.map((p) => p.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")).join("|");
-  const re = new RegExp(`\\b(?:${alt})\\d+\\b`, "g");
-  return [...new Set(title.match(re) || [])];
+  const families = new Set<string>();
+  for (const p of prefixes) {
+    const m = p.match(/^([A-Za-z]+)\d*-/);
+    if (m) families.add(m[1]);
+  }
+  if (!families.size) return [];
+  // Longest-first prevents partial collisions (e.g. `DD` over `D` if both existed).
+  const famAlt = [...families].sort((a, b) => b.length - a.length).join("|");
+  // Case-insensitive: PR titles often use lowercase variants
+  // (e.g. `feat(c-016): ...` vs blueprint `C-016`).
+  const re = new RegExp(`\\b(?:${famAlt})\\d*-\\d+\\b`, "gi");
+  const hits = new Set<string>();
+  for (const m of title.match(re) || []) hits.add(m.toUpperCase());
+  return [...hits];
 }
 
 export default {
@@ -48,7 +66,9 @@ export default {
 
     for (const repo of repos) {
       const prefixes = blueprints.prefixesByRepo[repo] || [];
-      if (!prefixes.length) continue;
+      // Note: we no longer skip repos with empty prefixes. The generic
+      // fallback in extractIds() catches novel IDs even when no prefix
+      // is registered yet.
 
       const result = await shell(
         `gh pr list --repo ${org}/${repo} --state merged --limit ${limit} --json number,title,mergedAt`
