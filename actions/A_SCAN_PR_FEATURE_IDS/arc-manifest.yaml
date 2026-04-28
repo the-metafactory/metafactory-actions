@@ -1,0 +1,18 @@
+schema: arc/v1
+name: A_SCAN_PR_FEATURE_IDS
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: []
+  network:
+    - domain: "api.github.com"
+      reason: "List merged PRs per repo via gh CLI"
+  bash:
+    allowed: true
+  secrets:
+    - GITHUB_TOKEN

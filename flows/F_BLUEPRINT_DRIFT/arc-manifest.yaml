@@ -1,0 +1,23 @@
+schema: arc/v1
+name: F_BLUEPRINT_DRIFT
+version: 1.0.0
+type: pipeline
+author:
+  name: metafactory
+  github: the-metafactory
+provides:
+  pipeline:
+    definition: pipeline.yaml
+capabilities:
+  filesystem:
+    # Flow walks `dev_root` from the closest `.ecosystem.yaml`. Declared
+    # paths here are advisory; actual scope is operator-config-driven.
+    read: ["./"]
+    write: ["/tmp/"]
+  network:
+    - domain: "api.github.com"
+      reason: "List merged PRs per repo via gh CLI"
+  bash:
+    allowed: true
+  secrets:
+    - GITHUB_TOKEN

@@ -1,0 +1,6 @@
+name: P_BLUEPRINT_DRIFT
+description: "Walk blueprint.yaml files, scan merged PRs, surface MISSING + STALE_STATUS entries"
+actions:
+  - A_FETCH_BLUEPRINTS
+  - A_SCAN_PR_FEATURE_IDS
+  - A_DETECT_DRIFT

@@ -10,3 +10,11 @@ features:
     issue: 2
     depends: [cue:C-1]
     description: "Add cue.yaml sidecar config to existing flows so they declare trigger conditions consumed by the cue daemon. Start with F_PR_STATS as the proving ground, then roll out to F_ECOSYSTEM_DIGEST, F_HANDOVER_DIGEST, F_NEXT_PICK, F_RSS_PIPELINE, F_SYNC_REPOS, F_ARC_UPGRADE. Blocked on cue v0 daemon shipping (cue:C-1)."
+
+  # Iteration 2 — Ecosystem audit pipelines
+  - id: MA-2
+    name: "F_BLUEPRINT_DRIFT — detect blueprint vs merged-PR drift"
+    status: done
+    iteration: 2
+    depends: []
+    description: "Pulse flow that walks every blueprint.yaml in the dev root, lists merged PRs per repo, extracts feature IDs from PR titles, and surfaces two drift categories: MISSING (id in PR title but not in blueprint) and STALE_STATUS (id in blueprint with non-done status but referenced in a merged PR). Filters to canonical repos via compass/ecosystem/repos.yaml. DD-prefix excluded by default (design decisions live in design-decisions.md). Fuzzy match handles digit-suffix variants (F-501 ↔ F5-501). Three actions: A_FETCH_BLUEPRINTS, A_SCAN_PR_FEATURE_IDS, A_DETECT_DRIFT. Output: markdown report + structured drift object."

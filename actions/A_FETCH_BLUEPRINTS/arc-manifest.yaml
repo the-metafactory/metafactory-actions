@@ -1,0 +1,19 @@
+schema: arc/v1
+name: A_FETCH_BLUEPRINTS
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    # Action walks `dev_root` from the closest `.ecosystem.yaml` (or the
+    # explicit `devRoot` input) and reads each canonical repo's blueprint.yaml.
+    # The actual scope is dynamic — declared paths here are advisory only,
+    # not a hardcoded operator-tree assumption.
+    read: ["./"]
+    write: []
+  network: []
+  bash:
+    allowed: true
+  secrets: []

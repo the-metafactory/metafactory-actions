@@ -1,0 +1,16 @@
+{
+  "name": "A_SCAN_PR_FEATURE_IDS",
+  "version": "1.0.0",
+  "description": "Per repo, list merged PRs and extract feature IDs from titles using each repo's blueprint prefixes",
+  "input": {
+    "blueprints": { "type": "object", "required": true },
+    "org": { "type": "string" },
+    "limit": { "type": "number" },
+    "sinceDate": { "type": "string" }
+  },
+  "output": {
+    "prRefs": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["github", "blueprint", "drift", "audit"]
+}
