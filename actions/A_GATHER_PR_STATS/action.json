@@ -1,0 +1,17 @@
+{
+  "name": "A_GATHER_PR_STATS",
+  "version": "1.0.0",
+  "description": "Fetch merged PRs per repo via gh CLI, grouped by merge date",
+  "input": {
+    "org": { "type": "string", "required": true },
+    "repos": { "type": "array", "required": true },
+    "sinceDate": { "type": "string", "required": true },
+    "excludeRepos": { "type": "array" }
+  },
+  "output": {
+    "prsByRepo": { "type": "object" },
+    "repos": { "type": "array" }
+  },
+  "requires": ["shell"],
+  "tags": ["github", "pr", "stats", "metafactory"]
+}

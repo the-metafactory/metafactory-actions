@@ -1,0 +1,17 @@
+schema: arc/v1
+name: A_RENDER_PR_CHART
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: ["/tmp/"]
+  network:
+    - domain: "cdn.jsdelivr.net"
+      reason: "Chart.js CDN reference in generated HTML"
+  bash:
+    allowed: false
+  secrets: []

@@ -1,0 +1,20 @@
+schema: arc/v1
+name: F_PR_STATS
+version: 1.0.0
+type: pipeline
+author:
+  name: metafactory
+  github: the-metafactory
+provides:
+  pipeline:
+    definition: pipeline.yaml
+capabilities:
+  filesystem:
+    read: ["./"]
+    write: ["/tmp/"]
+  network:
+    - domain: "api.github.com"
+      reason: "Fetch merged PR data via gh CLI"
+  bash:
+    allowed: true
+  secrets: []

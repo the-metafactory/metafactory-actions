@@ -1,0 +1,17 @@
+{
+  "name": "A_RENDER_PR_CHART",
+  "version": "1.0.0",
+  "description": "Generate dual Chart.js HTML — cumulative line + daily stacked bar for merged PRs",
+  "input": {
+    "prsByRepo": { "type": "object", "required": true },
+    "repos": { "type": "array", "required": true },
+    "sinceDate": { "type": "string", "required": true },
+    "outputPath": { "type": "string" }
+  },
+  "output": {
+    "outputPath": { "type": "string" },
+    "html": { "type": "string" }
+  },
+  "requires": ["writeFile"],
+  "tags": ["chart", "pr", "visualization"]
+}

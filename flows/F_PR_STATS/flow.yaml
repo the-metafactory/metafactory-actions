@@ -1,0 +1,12 @@
+name: F_PR_STATS
+description: "Merged PR stats — dual Chart.js visualization (cumulative + daily stacked bar)"
+source:
+  type: inline
+  defaults:
+    org: the-metafactory
+    sinceDate: "2026-03-26"
+    excludeRepos: ["content-filter"]
+    outputPath: "/tmp/mf-pr-stats.html"
+destination:
+  type: stdout
+pipeline: ./pipeline.yaml

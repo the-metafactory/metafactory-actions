@@ -1,0 +1,6 @@
+name: P_PR_STATS
+description: "Discover repos, gather merged PRs, render dual chart HTML"
+actions:
+  - A_DISCOVER_REPOS
+  - A_GATHER_PR_STATS
+  - A_RENDER_PR_CHART
