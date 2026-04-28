@@ -10,7 +10,9 @@ provides:
     definition: pipeline.yaml
 capabilities:
   filesystem:
-    read: ["./", "~/work/"]
+    # Flow walks `dev_root` from the closest `.ecosystem.yaml`. Declared
+    # paths here are advisory; actual scope is operator-config-driven.
+    read: ["./"]
     write: ["/tmp/"]
   network:
     - domain: "api.github.com"

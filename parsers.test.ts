@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { extractRepoNames, parseBlueprint, prefixesFromIds } from "./action";
-import { extractIds } from "../A_SCAN_PR_FEATURE_IDS/action";
+import {
+  extractFeatureIdsFromTitle as extractIds,
+  extractRepoNames,
+  parseBlueprint,
+  prefixesFromIds,
+} from "./utils";
 
 describe("prefixesFromIds — Holly #2: digit count widened from \\d? to \\d*", () => {
   test("single-letter prefixes (A-, F-)", () => {
@@ -182,7 +186,7 @@ describe("extractRepoNames — Holly cycle-2 #4: anchored YAML parse, no sibling
 
 describe("REPO_LINE — Holly #1: regex matches `repo:` on line 2 (m flag)", () => {
   test("import works (smoke test — full parser tested via integration)", async () => {
-    const mod = await import("./action");
+    const mod = await import("./actions/A_FETCH_BLUEPRINTS/action");
     expect(mod.default).toBeDefined();
   });
 

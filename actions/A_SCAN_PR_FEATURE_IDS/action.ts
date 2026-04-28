@@ -1,3 +1,4 @@
+import { extractFeatureIdsFromTitle } from "../../utils";
 import type { ActionContext } from "../../types";
 
 interface BlueprintIndex {
@@ -31,41 +32,13 @@ interface RepoScanTruncation {
   limit: number;
 }
 
-export function extractIds(title: string, prefixes: string[]): string[] {
-  // Match by LETTER-FAMILY (not exact prefix). For each registered
-  // prefix `X<digits>-`, derive the letters `X`; accept any digit-count
-  // variant `X\d*-\d+`. This addresses Holly review #5 fix #4: PR title
-  // `F5-501` is extracted even when the registered set is `["F-"]`,
-  // so A_DETECT_DRIFT gets a chance to fuzzy-normalize and match against
-  // F5-501 in blueprint. Stays repo-scoped (no generic catch-all
-  // false-positive flood from SHA-256, SOP-*, INC-*, T-*, FR-*, HL-*,
-  // CP-*, etc. that aren't blueprint feature IDs).
-  if (!prefixes.length) return [];
-  const families = new Set<string>();
-  for (const p of prefixes) {
-    const m = p.match(/^([A-Za-z]+)\d*-/);
-    if (m) families.add(m[1]);
-  }
-  if (!families.size) return [];
-  // Longest-first prevents partial collisions (e.g. `DD` over `D` if both existed).
-  const famAlt = [...families].sort((a, b) => b.length - a.length).join("|");
-  // Case-insensitive: PR titles often use lowercase variants
-  // (e.g. `feat(c-016): ...` vs blueprint `C-016`).
-  const re = new RegExp(`\\b(?:${famAlt})\\d*-\\d+\\b`, "gi");
-  const hits = new Set<string>();
-  for (const m of title.match(re) || []) hits.add(m.toUpperCase());
-  return [...hits];
-}
+// Re-export so the test file can pull from one location rather than reach
+// across action boundaries. (Holly cycle-3 W2)
+export { extractFeatureIdsFromTitle as extractIds };
 
 export default {
   async execute(input: Input, ctx: ActionContext) {
-    const {
-      blueprints,
-      org = "the-metafactory",
-      limit = 200,
-      sinceDate,
-      ...upstream
-    } = input;
+    const { blueprints, org = "the-metafactory", limit = 200, sinceDate, ...upstream } = input;
 
     const shell = ctx.capabilities.shell;
     if (!shell) throw new Error("Shell capability required");
@@ -84,10 +57,10 @@ export default {
       );
 
       // Surface per-repo scan failures rather than swallowing them. (Holly
-      // cycle-2 #1 [major]) `gh pr list` reports errors via stderr+exit;
-      // empty stdout from a failure used to JSON.parse-throw + silently
-      // `continue`, making MISSING/STALE counts a lower bound the operator
-      // couldn't distinguish from "0 drift in this repo".
+      // cycle-2 #1) `gh pr list` reports errors via stderr+exit; empty stdout
+      // from a failure used to JSON.parse-throw + silently `continue`,
+      // making MISSING/STALE counts a lower bound the operator couldn't
+      // distinguish from "0 drift in this repo".
       if (result.code !== 0) {
         const reason = (result.stderr || "").trim().slice(0, 200) || `exit ${result.code}`;
         failedRepos.push({ repo, reason });
@@ -105,17 +78,14 @@ export default {
         continue;
       }
 
-      // Surface limit-truncation as well (Holly cycle-2 #2 [warning]).
-      // `gh pr list` returns up to `limit` rows; if a repo's merged-PR
-      // history exceeds `limit` since `sinceDate`, the tail is silently
-      // dropped — operator needs to see that.
+      // Surface limit-truncation as well (Holly cycle-2 #2).
       if (prs.length === limit) {
         truncatedRepos.push({ repo, limit });
       }
 
       for (const pr of prs) {
         if (sinceDate && pr.mergedAt < sinceDate) continue;
-        const ids = extractIds(pr.title || "", prefixes);
+        const ids = extractFeatureIdsFromTitle(pr.title || "", prefixes);
         if (!ids.length) continue;
         prRefs.push({
           repo,
