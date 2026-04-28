@@ -1,0 +1,16 @@
+{
+  "name": "A_DETECT_DRIFT",
+  "version": "1.0.0",
+  "description": "Cross-reference blueprint features with merged PR feature-ID mentions; surface MISSING entries and STALE_STATUS entries",
+  "input": {
+    "blueprints": { "type": "object", "required": true },
+    "prRefs": { "type": "array", "required": true },
+    "outputPath": { "type": "string" }
+  },
+  "output": {
+    "drift": { "type": "object" },
+    "report": { "type": "string" }
+  },
+  "requires": ["shell"],
+  "tags": ["blueprint", "drift", "audit"]
+}
