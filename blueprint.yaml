@@ -1,0 +1,12 @@
+schema: blueprint/v1
+repo: metafactory-actions
+
+features:
+  # Iteration 1 — cue.yaml sidecar rollout
+  - id: MA-1
+    name: "cue.yaml sidecar rollout (start with F_PR_STATS)"
+    status: planned
+    iteration: 1
+    issue: 2
+    depends: [cue:C-1]
+    description: "Add cue.yaml sidecar config to existing flows so they declare trigger conditions consumed by the cue daemon. Start with F_PR_STATS as the proving ground, then roll out to F_ECOSYSTEM_DIGEST, F_HANDOVER_DIGEST, F_NEXT_PICK, F_RSS_PIPELINE, F_SYNC_REPOS, F_ARC_UPGRADE. Blocked on cue v0 daemon shipping (cue:C-1)."
