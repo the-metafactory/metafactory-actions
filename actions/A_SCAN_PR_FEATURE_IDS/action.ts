@@ -1,8 +1,8 @@
-import { extractFeatureIdsFromTitle } from "../../utils";
+import { extractFeatureIdsFromTitle, type BlueprintFeature } from "../../utils";
 import type { ActionContext } from "../../types";
 
 interface BlueprintIndex {
-  features: Array<{ repo: string; id: string; status: string; name: string }>;
+  features: BlueprintFeature[];
   prefixesByRepo: Record<string, string[]>;
 }
 
@@ -31,10 +31,6 @@ interface RepoScanTruncation {
   repo: string;
   limit: number;
 }
-
-// Re-export so the test file can pull from one location rather than reach
-// across action boundaries. (Holly cycle-3 W2)
-export { extractFeatureIdsFromTitle as extractIds };
 
 export default {
   async execute(input: Input, ctx: ActionContext) {

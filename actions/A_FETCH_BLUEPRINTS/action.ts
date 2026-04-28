@@ -18,10 +18,6 @@ interface BlueprintIndex {
   reposByPath: Record<string, string>;
 }
 
-// Re-export shared utilities so the test file can pull them from one place
-// rather than reaching across action boundaries. (Holly cycle-3 W2)
-export { extractRepoNames, parseBlueprint, prefixesFromIds };
-
 async function resolveDevRoot(
   shell: (cmd: string) => Promise<{ stdout: string; stderr: string; code: number }>,
   explicit: string | undefined

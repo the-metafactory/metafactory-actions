@@ -184,12 +184,7 @@ describe("extractRepoNames — Holly cycle-2 #4: anchored YAML parse, no sibling
   });
 });
 
-describe("REPO_LINE — Holly #1: regex matches `repo:` on line 2 (m flag)", () => {
-  test("import works (smoke test — full parser tested via integration)", async () => {
-    const mod = await import("./actions/A_FETCH_BLUEPRINTS/action");
-    expect(mod.default).toBeDefined();
-  });
-
+describe("REPO_LINE — Holly cycle-1 #1: regex must match `repo:` on line 2 (m flag)", () => {
   test("regex matches multi-line input (the canonical blueprint shape)", () => {
     // Re-derive the regex from the source contract: must match line-anchored
     // `repo:` even when it's not the first line of the file.

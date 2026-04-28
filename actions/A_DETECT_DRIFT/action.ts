@@ -1,16 +1,8 @@
+import type { BlueprintFeature } from "../../utils";
 import type { ActionContext } from "../../types";
 
-interface Feature {
-  repo: string;
-  id: string;
-  status: string;
-  name: string;
-  issue?: number;
-  iteration?: number;
-}
-
 interface BlueprintIndex {
-  features: Feature[];
+  features: BlueprintFeature[];
   prefixesByRepo: Record<string, string[]>;
 }
 
@@ -171,8 +163,8 @@ export default {
     if (!prRefs) throw new Error("prRefs input required");
 
     // Build feature index keyed by repo + id (exact AND normalized for fuzzy match)
-    const featureIndex = new Map<string, Feature>();
-    const featureIndexFuzzy = new Map<string, Feature>();
+    const featureIndex = new Map<string, BlueprintFeature>();
+    const featureIndexFuzzy = new Map<string, BlueprintFeature>();
     for (const f of blueprints.features) {
       featureIndex.set(`${f.repo}/${f.id}`, f);
       featureIndexFuzzy.set(`${f.repo}/${normalizeId(f.id)}`, f);
