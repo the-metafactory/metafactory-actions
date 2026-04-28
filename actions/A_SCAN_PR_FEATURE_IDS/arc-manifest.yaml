@@ -10,7 +10,8 @@ capabilities:
     read: ["./"]
     write: []
   network:
-    - "api.github.com"
+    - domain: "api.github.com"
+      reason: "List merged PRs per repo via gh CLI"
   bash:
     allowed: true
   secrets:

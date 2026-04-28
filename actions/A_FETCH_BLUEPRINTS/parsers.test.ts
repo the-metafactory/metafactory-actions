@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { prefixesFromIds } from "./action";
+import { extractRepoNames, prefixesFromIds } from "./action";
 import { extractIds } from "../A_SCAN_PR_FEATURE_IDS/action";
 
 describe("prefixesFromIds — Holly #2: digit count widened from \\d? to \\d*", () => {
@@ -76,6 +76,62 @@ describe("extractIds — Holly #4: family-based match accepts digit variants of 
     // but the alternation order in the regex must keep this safe.)
     const out = extractIds("feat: DD-90 federation decision", ["DD-"]);
     expect(out).toEqual(["DD-90"]);
+  });
+});
+
+describe("extractRepoNames — Holly cycle-2 #4: anchored YAML parse, no sibling pollution", () => {
+  test("returns repo keys under top-level `repos:` mapping", () => {
+    const yaml = [
+      "repos:",
+      "  arc:",
+      "    description: foo",
+      "  grove:",
+      "    description: bar",
+      "",
+    ].join("\n");
+    expect(extractRepoNames(yaml).sort()).toEqual(["arc", "grove"]);
+  });
+
+  test("ignores sibling top-level sections (metadata, defaults, roles)", () => {
+    // Pre-fix: regex `/^  (\w+):\s*$/gm` would also match `dev_root`, `roles`,
+    // `defaults` because they share the same indent — polluting the allowlist
+    // with non-repo names. Post-fix: anchored to repos: mapping only.
+    const yaml = [
+      "metadata:",
+      "  dev_root: ./",
+      "  version: 1",
+      "repos:",
+      "  arc:",
+      "    description: foo",
+      "  grove:",
+      "    description: bar",
+      "defaults:",
+      "  status: active",
+      "roles:",
+      "  steward: jc",
+      "",
+    ].join("\n");
+    const out = extractRepoNames(yaml).sort();
+    expect(out).toEqual(["arc", "grove"]);
+    expect(out).not.toContain("dev_root");
+    expect(out).not.toContain("status");
+    expect(out).not.toContain("steward");
+  });
+
+  test("empty input yields empty list (caller decides fail-open vs fail-closed)", () => {
+    expect(extractRepoNames("")).toEqual([]);
+    expect(extractRepoNames("   \n  \n")).toEqual([]);
+  });
+
+  test("missing repos: key yields empty list", () => {
+    const yaml = "metadata:\n  version: 1\n";
+    expect(extractRepoNames(yaml)).toEqual([]);
+  });
+
+  test("malformed YAML yields empty list (no throw)", () => {
+    const yaml = "repos:\n  : invalid\n   bad indent";
+    // Should not throw — caller's fail-closed `size === 0` will catch it.
+    expect(() => extractRepoNames(yaml)).not.toThrow();
   });
 });
 

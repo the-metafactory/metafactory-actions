@@ -39,18 +39,24 @@ interface StaleEntry {
 interface Drift {
   missing: MissingEntry[];
   staleStatus: StaleEntry[];
+  failedRepos: Array<{ repo: string; reason: string }>;
+  truncatedRepos: Array<{ repo: string; limit: number }>;
   stats: {
     repos: number;
     blueprintFeatures: number;
     prsScanned: number;
     missingCount: number;
     staleCount: number;
+    failedRepoCount: number;
+    truncatedRepoCount: number;
   };
 }
 
 interface Input {
   blueprints: BlueprintIndex;
   prRefs: PRRef[];
+  failedRepos?: Array<{ repo: string; reason: string }>;
+  truncatedRepos?: Array<{ repo: string; limit: number }>;
   outputPath?: string;
   /** Prefixes to exclude from MISSING/STALE classification — useful for design-decision IDs (e.g. "DD-") that are tracked outside blueprint.yaml */
   excludePrefixes?: string[];
@@ -69,6 +75,29 @@ function fmtMarkdown(drift: Drift): string {
   out.push("");
   out.push(`Generated: ${new Date().toISOString()}`);
   out.push("");
+
+  // Scan-incomplete header BEFORE the stats — operator must see immediately
+  // that the report is a lower bound when any repo failed or was truncated.
+  // (Holly cycle-2 #1+#2)
+  if (drift.failedRepos.length || drift.truncatedRepos.length) {
+    out.push(`> ⚠️ **Scan incomplete — drift counts below are a lower bound.**`);
+    if (drift.failedRepos.length) {
+      const list = drift.failedRepos
+        .map((f) => `${f.repo} (${f.reason})`)
+        .join("; ");
+      out.push(`>`);
+      out.push(`> Scan failed for: ${list}`);
+    }
+    if (drift.truncatedRepos.length) {
+      const list = drift.truncatedRepos
+        .map((t) => `${t.repo} (hit limit=${t.limit})`)
+        .join("; ");
+      out.push(`>`);
+      out.push(`> PR list truncated for: ${list} — raise \`limit\` input to capture older PRs.`);
+    }
+    out.push("");
+  }
+
   out.push(`## Stats`);
   out.push("");
   out.push(`- Repos scanned: ${drift.stats.repos}`);
@@ -76,6 +105,12 @@ function fmtMarkdown(drift: Drift): string {
   out.push(`- Merged PRs scanned: ${drift.stats.prsScanned}`);
   out.push(`- **MISSING entries: ${drift.stats.missingCount}**`);
   out.push(`- **STALE_STATUS entries: ${drift.stats.staleCount}**`);
+  if (drift.stats.failedRepoCount > 0) {
+    out.push(`- **Failed scans: ${drift.stats.failedRepoCount}**`);
+  }
+  if (drift.stats.truncatedRepoCount > 0) {
+    out.push(`- **Truncated scans: ${drift.stats.truncatedRepoCount}**`);
+  }
   out.push("");
 
   if (drift.missing.length) {
@@ -122,7 +157,15 @@ function fmtMarkdown(drift: Drift): string {
 
 export default {
   async execute(input: Input, ctx: ActionContext) {
-    const { blueprints, prRefs, outputPath, excludePrefixes = ["DD-"], ...upstream } = input;
+    const {
+      blueprints,
+      prRefs,
+      failedRepos = [],
+      truncatedRepos = [],
+      outputPath,
+      excludePrefixes = ["DD-"],
+      ...upstream
+    } = input;
 
     if (!blueprints) throw new Error("blueprints input required");
     if (!prRefs) throw new Error("prRefs input required");
@@ -175,12 +218,16 @@ export default {
     const drift: Drift = {
       missing: [...missingMap.values()],
       staleStatus: [...staleMap.values()],
+      failedRepos,
+      truncatedRepos,
       stats: {
         repos: Object.keys(blueprints.prefixesByRepo).length,
         blueprintFeatures: blueprints.features.length,
         prsScanned: prRefs.length,
         missingCount: missingMap.size,
         staleCount: staleMap.size,
+        failedRepoCount: failedRepos.length,
+        truncatedRepoCount: truncatedRepos.length,
       },
     };
 

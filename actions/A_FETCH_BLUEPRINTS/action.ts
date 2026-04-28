@@ -92,6 +92,47 @@ function finalize(p: Partial<Feature>, repo: string): Feature {
   };
 }
 
+/**
+ * Extract canonical repo names from compass/ecosystem/repos.yaml. Anchored
+ * to the top-level `repos:` mapping — sibling top-level sections (metadata,
+ * defaults, roles, etc.) are ignored. Empty input or absent `repos:` → [].
+ * (Holly cycle-2 #4)
+ *
+ * Implementation: section-aware single-pass scan. Find the line matching
+ * `^repos:$`; from there, capture top-level mapping keys at indent === 2;
+ * stop on the next line whose indent is 0 (next top-level section) OR
+ * any line that re-enters indent === 0 (siblings of `repos:`).
+ *
+ * We use a hand-rolled scan rather than a full YAML parser because (a) the
+ * registry is shape-stable (repos: → 2-space-indented name keys), (b) Bun's
+ * built-in `bun:yaml` doesn't resolve under `bun test` in this repo (no
+ * package.json), and (c) installing a yaml dep just for this one shape
+ * isn't worth it.
+ */
+export function extractRepoNames(yamlText: string): string[] {
+  if (!yamlText.trim()) return [];
+  const lines = yamlText.split("\n");
+  const result: string[] = [];
+  let inReposSection = false;
+
+  for (const line of lines) {
+    if (!line.trim() || line.trimStart().startsWith("#")) continue;
+    const indent = line.length - line.trimStart().length;
+
+    if (!inReposSection) {
+      if (/^repos:\s*$/.test(line)) inReposSection = true;
+      continue;
+    }
+    // We're inside repos: — exit on the next top-level (indent 0) section
+    if (indent === 0) break;
+    // Top-level mapping keys under repos: live at indent === 2
+    if (indent !== 2) continue;
+    const keyMatch = line.match(/^  ([A-Za-z0-9][A-Za-z0-9_-]*):\s*$/);
+    if (keyMatch) result.push(keyMatch[1]);
+  }
+  return result;
+}
+
 export function prefixesFromIds(ids: string[]): string[] {
   const set = new Set<string>();
   for (const id of ids) {
@@ -124,24 +165,19 @@ export default {
 
     // Load canonical repo allowlist from compass/ecosystem/repos.yaml.
     // Filters out alternate clones / worktrees / experimental forks at devRoot.
+    // Use a real YAML parser anchored to the `repos:` key — a regex would
+    // pollute the allowlist with siblings of repos: (metadata, defaults,
+    // roles, etc.) since they share the same indent level. (Holly cycle-2 #4)
     // Fail-closed: if the registry can't be read or yields no entries we
-    // throw rather than silently treating every blueprint as canonical
-    // (which would re-introduce the bug A_FETCH_BLUEPRINTS exists to avoid).
-    // (Holly review #5)
+    // throw rather than silently treating every blueprint as canonical.
     const regPath = registryPath || `${root}/compass/ecosystem/repos.yaml`;
-    const allowlist = new Set<string>();
     const reg = await shell(`cat ${regPath} 2>/dev/null`);
-    if (reg.stdout) {
-      // Match top-level repo keys: 2-space indent followed by name and colon
-      const repoKey = /^  ([A-Za-z0-9][A-Za-z0-9_-]*):\s*$/gm;
-      let m: RegExpExecArray | null;
-      while ((m = repoKey.exec(reg.stdout)) !== null) allowlist.add(m[1]);
-    }
+    const allowlist = new Set<string>(extractRepoNames(reg.stdout));
     if (allowlist.size === 0) {
       throw new Error(
         `A_FETCH_BLUEPRINTS: failed to load canonical repo allowlist from ${regPath}. ` +
-          `Pass an explicit registryPath, or check the file exists with the expected ` +
-          `2-space-indented \`name:\` keys under a top-level \`repos:\` section.`
+          `Expected a top-level \`repos:\` mapping with one entry per ecosystem repo. ` +
+          `Pass an explicit registryPath if the registry lives elsewhere.`
       );
     }
 

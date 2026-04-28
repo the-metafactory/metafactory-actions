@@ -1,6 +1,6 @@
 schema: arc/v1
 name: metafactory-actions
-version: 1.2.0
+version: 1.3.0
 type: library
 description: Shared actions and flows for the metafactory ecosystem
 author:
@@ -52,6 +52,16 @@ artifacts:
     description: Write handover digest using LLM
   - path: actions/A_DELIVER
     description: Deliver handover to Discord/Slack
+  - path: actions/A_GATHER_PR_STATS
+    description: Gather merged PR data per repo for time-series charting
+  - path: actions/A_RENDER_PR_CHART
+    description: Render dual Chart.js visualization of PR activity
+  - path: actions/A_FETCH_BLUEPRINTS
+    description: Walk dev_root, parse every blueprint.yaml, emit per-repo feature index
+  - path: actions/A_SCAN_PR_FEATURE_IDS
+    description: Per repo, list merged PRs and extract feature IDs from titles
+  - path: actions/A_DETECT_DRIFT
+    description: Cross-reference blueprint features vs merged PRs; surface MISSING + STALE_STATUS
   # Flows
   - path: flows/F_NEXT_PICK
     description: Scan repos and blueprints, rank work, select best next task
@@ -65,3 +75,7 @@ artifacts:
     description: Pull latest for all metafactory repos, clone new ones
   - path: flows/F_RSS_PIPELINE
     description: Fetch RSS → extract articles → rate → recommend
+  - path: flows/F_PR_STATS
+    description: Merged PR history per repo → dual chart visualization
+  - path: flows/F_BLUEPRINT_DRIFT
+    description: Detect drift between merged PRs and blueprint.yaml across the ecosystem

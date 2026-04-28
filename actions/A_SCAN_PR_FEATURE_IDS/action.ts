@@ -21,6 +21,16 @@ interface PRRef {
   ids: string[];
 }
 
+interface RepoScanFailure {
+  repo: string;
+  reason: string;
+}
+
+interface RepoScanTruncation {
+  repo: string;
+  limit: number;
+}
+
 export function extractIds(title: string, prefixes: string[]): string[] {
   // Match by LETTER-FAMILY (not exact prefix). For each registered
   // prefix `X<digits>-`, derive the letters `X`; accept any digit-count
@@ -63,22 +73,44 @@ export default {
 
     const repos = Object.keys(blueprints.prefixesByRepo);
     const prRefs: PRRef[] = [];
+    const failedRepos: RepoScanFailure[] = [];
+    const truncatedRepos: RepoScanTruncation[] = [];
 
     for (const repo of repos) {
       const prefixes = blueprints.prefixesByRepo[repo] || [];
-      // Note: we no longer skip repos with empty prefixes. The generic
-      // fallback in extractIds() catches novel IDs even when no prefix
-      // is registered yet.
 
       const result = await shell(
         `gh pr list --repo ${org}/${repo} --state merged --limit ${limit} --json number,title,mergedAt`
       );
+
+      // Surface per-repo scan failures rather than swallowing them. (Holly
+      // cycle-2 #1 [major]) `gh pr list` reports errors via stderr+exit;
+      // empty stdout from a failure used to JSON.parse-throw + silently
+      // `continue`, making MISSING/STALE counts a lower bound the operator
+      // couldn't distinguish from "0 drift in this repo".
+      if (result.code !== 0) {
+        const reason = (result.stderr || "").trim().slice(0, 200) || `exit ${result.code}`;
+        failedRepos.push({ repo, reason });
+        continue;
+      }
+
       let prs: Array<{ number: number; title: string; mergedAt: string }>;
       try {
         prs = JSON.parse(result.stdout);
-      } catch {
-        // skip repos with no access / no PRs
+      } catch (err) {
+        failedRepos.push({
+          repo,
+          reason: `JSON parse failed: ${(err as Error).message.slice(0, 100)}`,
+        });
         continue;
+      }
+
+      // Surface limit-truncation as well (Holly cycle-2 #2 [warning]).
+      // `gh pr list` returns up to `limit` rows; if a repo's merged-PR
+      // history exceeds `limit` since `sinceDate`, the tail is silently
+      // dropped — operator needs to see that.
+      if (prs.length === limit) {
+        truncatedRepos.push({ repo, limit });
       }
 
       for (const pr of prs) {
@@ -95,6 +127,6 @@ export default {
       }
     }
 
-    return { ...upstream, blueprints, prRefs };
+    return { ...upstream, blueprints, prRefs, failedRepos, truncatedRepos };
   },
 };
