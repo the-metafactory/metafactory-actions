@@ -1,0 +1,13 @@
+{
+  "name": "A_FETCH_BLUEPRINTS",
+  "version": "1.0.0",
+  "description": "Walk dev root, parse all blueprint.yaml files, emit feature index per repo",
+  "input": {
+    "devRoot": { "type": "string" }
+  },
+  "output": {
+    "blueprints": { "type": "object" }
+  },
+  "requires": ["shell"],
+  "tags": ["blueprint", "drift", "audit", "metafactory"]
+}
