@@ -22,7 +22,10 @@ interface BlueprintIndex {
 }
 
 const FEATURE_BLOCK = /^\s*-\s+id:\s+([A-Za-z0-9_-]+)\s*$/;
-const STATUS_LINE = /^\s+status:\s+(\w+)/;
+// `[\w-]+` not `\w+` — `status: in-progress` / `not-started` / `in-review`
+// would otherwise capture only "in" / "not" (\w doesn't match `-`), and
+// A_DETECT_DRIFT would render `(in)` in every STALE row. (Holly cycle-3 #1)
+const STATUS_LINE = /^\s+status:\s+([\w-]+)/;
 const NAME_LINE = /^\s+name:\s*(?:"([^"]*)"|(.+))$/;
 const ISSUE_LINE = /^\s+issue:\s+(\d+)/;
 const ITERATION_LINE = /^\s+iteration:\s+(\d+)/;
@@ -32,7 +35,10 @@ const ITERATION_LINE = /^\s+iteration:\s+(\d+)/;
 // silently to the directory name. (Holly review #5)
 const REPO_LINE = /^repo:\s+([A-Za-z0-9_-]+)/m;
 
-function parseBlueprint(yamlText: string, fallbackRepo: string): { repo: string; features: Feature[] } {
+export function parseBlueprint(
+  yamlText: string,
+  fallbackRepo: string
+): { repo: string; features: Feature[] } {
   const lines = yamlText.split("\n");
   let repo = fallbackRepo;
   const repoMatch = yamlText.match(REPO_LINE);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractRepoNames, prefixesFromIds } from "./action";
+import { extractRepoNames, parseBlueprint, prefixesFromIds } from "./action";
 import { extractIds } from "../A_SCAN_PR_FEATURE_IDS/action";
 
 describe("prefixesFromIds — Holly #2: digit count widened from \\d? to \\d*", () => {
@@ -76,6 +76,51 @@ describe("extractIds — Holly #4: family-based match accepts digit variants of 
     // but the alternation order in the regex must keep this safe.)
     const out = extractIds("feat: DD-90 federation decision", ["DD-"]);
     expect(out).toEqual(["DD-90"]);
+  });
+});
+
+describe("parseBlueprint — Holly cycle-3 #1: status regex captures hyphenated values", () => {
+  test("status: in-progress is captured fully (not truncated to 'in')", () => {
+    const yaml = [
+      "schema: blueprint/v1",
+      "repo: meta-factory",
+      "",
+      "features:",
+      "  - id: F-1",
+      "    status: in-progress",
+      "    name: Active feature",
+      "",
+    ].join("\n");
+    const { features } = parseBlueprint(yaml, "fallback");
+    expect(features[0].status).toBe("in-progress");
+    expect(features[0].status).not.toBe("in");
+  });
+
+  test("multiple hyphenated statuses (in-review, not-started) all captured", () => {
+    const yaml = [
+      "schema: blueprint/v1",
+      "repo: x",
+      "features:",
+      "  - id: A-1",
+      "    status: in-review",
+      "    name: A",
+      "  - id: A-2",
+      "    status: not-started",
+      "    name: B",
+      "  - id: A-3",
+      "    status: done",
+      "    name: C",
+      "",
+    ].join("\n");
+    const { features } = parseBlueprint(yaml, "fallback");
+    const statuses = features.map((f) => f.status);
+    expect(statuses).toEqual(["in-review", "not-started", "done"]);
+  });
+
+  test("canonical repo: field on line 2 wins over fallbackRepo (Holly cycle-1 #1)", () => {
+    const yaml = "schema: blueprint/v1\nrepo: real-name\n\nfeatures:\n  - id: A-1\n    status: done\n    name: x\n";
+    const { repo } = parseBlueprint(yaml, "fallback-from-dir");
+    expect(repo).toBe("real-name");
   });
 });
 

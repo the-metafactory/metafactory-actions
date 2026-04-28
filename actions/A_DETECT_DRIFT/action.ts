@@ -239,9 +239,16 @@ export default {
       if (writeFile) {
         await writeFile(outputPath, report);
       } else if (shell) {
-        // Fallback via shell heredoc
-        const escaped = report.replace(/'/g, "'\\''");
-        await shell(`cat > ${outputPath} << 'BLUEPRINT_DRIFT_EOF'\n${escaped}\nBLUEPRINT_DRIFT_EOF`);
+        // Shell-only fallback: a single-quoted heredoc (<<'EOF') has a
+        // literal body — no shell expansion, no escape rules. Just write
+        // the report as-is. The cycle-1 attempt to apply single-quote
+        // shell-string escaping (`'\\''`) was wrong: that's the syntax
+        // for escaping inside single-quoted strings, NOT inside a
+        // single-quoted heredoc body where it would corrupt apostrophes
+        // in PR titles into `'\''`. (Holly cycle-3 #2)
+        await shell(
+          `cat > ${outputPath} << 'BLUEPRINT_DRIFT_EOF'\n${report}\nBLUEPRINT_DRIFT_EOF`
+        );
       }
     }
 
