@@ -74,7 +74,9 @@ export default {
     // query contains single quotes and $-JSON-paths.
     const escapedQuery = QUERY.replace(/(["\\$`])/g, "\\$1");
     const result = await shell(
-      `cd "${metafactoryPath}" && bunx wrangler d1 execute ${database} --remote --env ${environment} --json --command "${escapedQuery}" 2>/dev/null`
+      // No stderr redirect: wrangler config warnings go to stderr (stdout
+      // stays pure JSON), and the error path below needs stderr for diagnostics.
+      `cd "${metafactoryPath}" && bunx wrangler d1 execute ${database} --remote --env ${environment} --json --command "${escapedQuery}"`
     );
     if (result.code !== 0) {
       throw new Error(`wrangler d1 execute failed (exit ${result.code}): ${result.stderr.trim().slice(0, 500)}`);
