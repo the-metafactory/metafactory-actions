@@ -1,13 +1,13 @@
 # metafactory-actions
 
-Shared actions and flows for the metafactory ecosystem. An [arc](https://github.com/the-metafactory/arc) library containing 22 independent actions and 6 orchestration flows, all runnable via [pulse](https://github.com/the-metafactory/pulse).
+Shared actions and flows for the metafactory ecosystem. An [arc](https://github.com/the-metafactory/arc) library containing 28 independent actions and 8 orchestration flows, all runnable via [pulse](https://github.com/the-metafactory/pulse).
 
 ## Install
 
 Requires [arc](https://github.com/the-metafactory/arc) v0.9.1+.
 
 ```bash
-arc install metafactory-actions                    # all 28 artifacts
+arc install metafactory-actions                    # all 36 artifacts
 arc install metafactory-actions:A_DISCOVER_REPOS   # single action
 arc install metafactory-actions:F_NEXT_PICK        # single flow
 ```
@@ -40,6 +40,12 @@ Actions are independent, composable units. Each has an `action.json` manifest an
 | **A_GATHER_THREADS** | Gather active discussion threads for handover | shell, fetch |
 | **A_WRITE_HANDOVER** | Write handover digest using LLM | llm |
 | **A_DELIVER** | Deliver handover to Discord/Slack | fetch |
+| **A_GATHER_PR_STATS** | Gather merged PR data per repo for time-series charting | shell |
+| **A_RENDER_PR_CHART** | Render dual Chart.js visualization of PR activity | writeFile |
+| **A_FETCH_BLUEPRINTS** | Walk dev_root, parse every blueprint.yaml, emit per-repo feature index | shell |
+| **A_SCAN_PR_FEATURE_IDS** | Per repo, list merged PRs and extract feature IDs from titles | shell |
+| **A_DETECT_DRIFT** | Cross-reference blueprint features vs merged PRs; surface drift | shell |
+| **A_COUNT_DOWNLOADS** | Count package downloads per package from production audit log (D1) | shell |
 
 ## Flows
 
