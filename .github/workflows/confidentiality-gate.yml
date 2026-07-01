@@ -28,11 +28,6 @@ on:
         type: string
         required: false
         default: "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d"
-      engine_ref:
-        description: "Fallback ref of the-metafactory/metafactory-actions for the engine when job_workflow_ref can't be parsed."
-        type: string
-        required: false
-        default: "main"
     secrets:
       MF_CONFIDENTIALITY_DENYLIST:
         description: "Salted-SHA-256 hashed denylist (org secret, selected public repos). Absent on fork PRs ⇒ degraded."
@@ -53,24 +48,39 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Pin the ENGINE to the same ref the gate itself was invoked at, so a
-      # SHA-pinned caller gets a SHA-matched engine (not a floating main).
-      - name: Resolve engine ref
+      # Pin the ENGINE to the IMMUTABLE commit SHA of the reusable-workflow file
+      # GitHub resolved for this run (`github.job_workflow_sha`). This is the same
+      # commit the gate itself was loaded from, so the engine is byte-matched to the
+      # gate — and it is a resolved 40-hex SHA regardless of whether the caller wrote
+      # a branch, tag, or SHA in `uses:`. A movable tag / floating `main` can no
+      # longer select the engine (M-8). Fail-closed if it is not a 40-hex commit.
+      - name: Resolve engine SHA (immutable)
         env:
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
           JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
-          FALLBACK: ${{ inputs.engine_ref }}
         run: |
-          REF="${JOB_WORKFLOW_REF##*@}"
-          [ -z "$REF" ] && REF="$FALLBACK"
-          echo "ENGINE_REF=$REF" >> "$GITHUB_ENV"
-          echo "::notice::confidentiality-gate engine ref = $REF"
+          set -euo pipefail
+          SHA="${JOB_WORKFLOW_SHA:-}"
+          if ! printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            # Fallback: accept ONLY a 40-hex SHA parsed from job_workflow_ref's @<ref>.
+            CAND="${JOB_WORKFLOW_REF##*@}"
+            if printf '%s' "$CAND" | grep -qE '^[0-9a-f]{40}$'; then
+              SHA="$CAND"
+            else
+              echo "::error::confidentiality-gate: could not resolve an immutable engine commit SHA (job_workflow_sha='${JOB_WORKFLOW_SHA:-}', ref='${JOB_WORKFLOW_REF:-}'). A branch/tag ref is movable and MUST NOT select the engine. Failing closed."
+              exit 1
+            fi
+          fi
+          echo "ENGINE_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "::notice::confidentiality-gate engine SHA = $SHA (immutable)"
 
-      - name: Checkout scan engine (metafactory-actions)
+      - name: Checkout scan engine (metafactory-actions @ immutable SHA)
         uses: actions/checkout@v4
         with:
           repository: the-metafactory/metafactory-actions
-          ref: ${{ env.ENGINE_REF }}
+          ref: ${{ env.ENGINE_SHA }}
           path: _scan_engine
+          persist-credentials: false
 
       - name: Caller integrity (advisory SHA-pin check)
         run: |
@@ -90,36 +100,54 @@ jobs:
         with:
           bun-version: latest
 
+      # Key the cache on version + the EXPECTED sha256 so a differently-hashed
+      # payload lands in a different namespace. Integrity does NOT rely on the key,
+      # though — the setup step re-verifies the tarball on every run, incl. cache
+      # restores (H-4).
       - name: Cache gitleaks
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/gitleaks
-          key: gitleaks-${{ inputs.gitleaks_version }}-linux-x64
+          key: gitleaks-${{ inputs.gitleaks_version }}-${{ inputs.gitleaks_sha256 }}-linux-x64
 
-      - name: Setup gitleaks (pinned + sha256-verified, best-effort)
+      - name: Setup gitleaks (pinned + sha256-verified on EVERY run, incl. cache restore)
         env:
           GL_VER: ${{ inputs.gitleaks_version }}
           GL_SHA: ${{ inputs.gitleaks_sha256 }}
         run: |
           set -uo pipefail
           GL_DIR="${{ runner.temp }}/gitleaks"
-          if [ ! -x "$GL_DIR/gitleaks" ]; then
-            mkdir -p "$GL_DIR"
-            TARBALL="$GL_DIR/gitleaks.tar.gz"
+          BIN="$GL_DIR/gitleaks"
+          TARBALL="$GL_DIR/gitleaks.tar.gz"
+          mkdir -p "$GL_DIR"
+
+          # Download the tarball only if it isn't already present (a cache restore
+          # brings it back). The binary is NOT trusted on presence — it is always
+          # re-derived from a re-verified tarball below.
+          if [ ! -f "$TARBALL" ]; then
             URL="https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz"
-            if curl -sSL --retry 3 --retry-delay 2 --max-time 60 -o "$TARBALL" "$URL"; then
-              if ! echo "${GL_SHA}  ${TARBALL}" | sha256sum -c - ; then
-                echo "::warning::gitleaks sha256 MISMATCH for v${GL_VER} — refusing to run an unverified binary; tier 1 skipped (tiers 2+3 still gate)"
-                rm -f "$TARBALL"; exit 0
-              fi
-              tar -xzf "$TARBALL" -C "$GL_DIR" gitleaks || { echo "::warning::gitleaks extract failed — tier 1 skipped"; exit 0; }
-            else
-              echo "::warning::gitleaks download failed (flake) — tier 1 skipped; the cache prevents a repeat next run"
-              exit 0
+            if ! curl -sSL --retry 3 --retry-delay 2 --max-time 60 -o "$TARBALL" "$URL"; then
+              echo "::warning::gitleaks download failed (flake) — tier 1 skipped; tiers 2+3 still gate"
+              rm -f "$BIN"; exit 0
             fi
           fi
-          if [ -x "$GL_DIR/gitleaks" ]; then
-            echo "MF_GITLEAKS_BIN=$GL_DIR/gitleaks" >> "$GITHUB_ENV"
+
+          # ALWAYS verify the tarball's sha256 — whether freshly downloaded OR
+          # restored from cache. A poisoned cache entry (swapped tarball) fails here
+          # and tier 1 is skipped rather than run unverified (H-4).
+          if ! echo "${GL_SHA}  ${TARBALL}" | sha256sum -c - ; then
+            echo "::warning::gitleaks sha256 MISMATCH for v${GL_VER} — refusing to run an unverified/poisoned binary; tier 1 skipped (tiers 2+3 still gate)"
+            rm -f "$TARBALL" "$BIN"; exit 0
+          fi
+
+          # Re-extract from the verified tarball every run — overwrites any tampered
+          # binary a poisoned cache may have carried alongside a valid tarball.
+          if ! tar -xzf "$TARBALL" -C "$GL_DIR" gitleaks; then
+            echo "::warning::gitleaks extract failed — tier 1 skipped"; rm -f "$BIN"; exit 0
+          fi
+
+          if [ -x "$BIN" ]; then
+            echo "MF_GITLEAKS_BIN=$BIN" >> "$GITHUB_ENV"
             echo "$GL_DIR" >> "$GITHUB_PATH"
           fi
 
@@ -144,10 +172,17 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # Refuse pull_request_target: it exposes org secrets to fork-authored PRs
+          # AND checks out the BASE tree by default (so the PR's changes go unscanned)
+          # — a fail-open + secret-exposure footgun. Use pull_request only (M-9).
+          if [ "$EVENT" = "pull_request_target" ]; then
+            echo "::error::confidentiality-gate: pull_request_target is not supported (secret exposure to fork head + base-tree checkout ⇒ fail-open). Wire the gate on 'pull_request'. Failing closed."
+            exit 1
+          fi
           MODE="$MODE_IN"
           if [ -z "$MODE" ] || [ "$MODE" = "auto" ]; then
             case "$EVENT" in
-              pull_request|pull_request_target) MODE="diff" ;;
+              pull_request) MODE="diff" ;;
               push) MODE="tree" ;;
               schedule|workflow_dispatch) MODE="history" ;;
               *) MODE="tree" ;;
@@ -156,15 +191,50 @@ jobs:
           echo "SCAN_MODE=$MODE" >> "$GITHUB_ENV"
           echo "::notice::confidentiality-gate mode=$MODE (event=$EVENT)"
 
-      - name: Fetch PR base (diff mode)
+      # Fetch the PR base and PROVE the diff range is trustworthy before the scan.
+      # A silently-empty or errored diff must never be read as "clean" (CONFIRMED-3).
+      - name: Fetch + verify PR base (diff mode)
         if: ${{ env.SCAN_MODE == 'diff' }}
         env:
           BASE_REF: ${{ github.base_ref }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
         run: |
           set -euo pipefail
-          [ -n "${BASE_REF:-}" ] && git fetch --no-tags --prune origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" || true
+          if [ -z "${BASE_REF:-}" ]; then
+            echo "::error::confidentiality-gate: diff mode but github.base_ref is empty — cannot compute a trustworthy PR diff. Failing closed."
+            exit 1
+          fi
+          # No `|| true`: a failed fetch now fails the job (set -e).
+          git fetch --no-tags --prune origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/${BASE_REF}" >/dev/null; then
+            echo "::error::confidentiality-gate: base ref origin/${BASE_REF} did not resolve after fetch — refusing to scan an empty/partial diff. Failing closed."
+            exit 1
+          fi
+          # If GitHub says this PR changes files, the scan range MUST reflect that.
+          # A range that resolves 0 files while changed_files>0 means we'd 'pass'
+          # having scanned nothing — fail closed instead.
+          CHANGED="${PR_CHANGED_FILES:-0}"
+          case "$CHANGED" in ''|*[!0-9]*) CHANGED=0 ;; esac
+          if [ "$CHANGED" -gt 0 ]; then
+            RANGE_FILES="$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -c . || true)"
+            if [ "${RANGE_FILES:-0}" -eq 0 ]; then
+              echo "::error::confidentiality-gate: PR reports ${CHANGED} changed file(s) but scan range origin/${BASE_REF}...HEAD resolved 0 files — refusing to report clean on an empty diff. Failing closed."
+              exit 1
+            fi
+            echo "::notice::confidentiality-gate diff range covers ${RANGE_FILES} file(s) (PR changed_files=${CHANGED})"
+          fi
 
+      # Run the interpreter from a TRUSTED, clean directory (runner.temp) — NEVER
+      # from the caller workspace. `bun` auto-loads `bunfig.toml` (and its `preload`
+      # → arbitrary code execution) from its CWD; with CWD inside the attacker-
+      # controlled checkout, a PR that adds a root `bunfig.toml` would run code in
+      # this secret-bearing job. bun does not walk parent dirs for bunfig, so a clean
+      # CWD + absolute engine path fully closes it (CONFIRMED-1). The engine scans the
+      # caller tree via `--target` and pins gitleaks to a trusted config via
+      # `--gitleaks-config` so an in-tree `.gitleaks.toml` can't disable tier 1
+      # (CONFIRMED-2). Both flags are provided by the engine in #9.
       - name: Run confidentiality scan
+        working-directory: ${{ runner.temp }}
         env:
           # Secrets → env (never interpolated into the script body).
           MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
@@ -174,16 +244,19 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.base_ref }}
+          WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          ENGINE="_scan_engine/scan/confidentiality-scan.ts"
-          PATTERNS="_scan_engine/scan/public-patterns.yaml"
-          ARGS=("$SCAN_MODE" --patterns "$PATTERNS")
+          ENGINE="$WORKSPACE/_scan_engine/scan/confidentiality-scan.ts"
+          PATTERNS="$WORKSPACE/_scan_engine/scan/public-patterns.yaml"
+          GITLEAKS_CONFIG="$WORKSPACE/_scan_engine/scan/gitleaks.toml"
+          # Scan the caller tree by explicit path; bun's CWD stays trusted (runner.temp).
+          ARGS=("$SCAN_MODE" --target "$WORKSPACE" --patterns "$PATTERNS" --gitleaks-config "$GITLEAKS_CONFIG")
           if [ "$SCAN_MODE" = "diff" ]; then
             ARGS+=(--range "origin/${BASE_REF}...HEAD")
             [ -n "${PR_TITLE:-}" ] && ARGS+=(--extra-text "$PR_TITLE")
             [ -n "${PR_BODY:-}" ] && ARGS+=(--extra-text "$PR_BODY")
             [ -n "${HEAD_BRANCH:-}" ] && ARGS+=(--extra-text "$HEAD_BRANCH")
           fi
-          echo "running: bun $ENGINE ${ARGS[*]}"
+          echo "running (cwd=$PWD, trusted): bun $ENGINE ${ARGS[*]}"
           bun "$ENGINE" "${ARGS[@]}"

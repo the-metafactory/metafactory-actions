@@ -136,14 +136,17 @@ history, and the merge-bypass path. They drive the shared scan engine in
   default branch (forced push, direct push, **zero-approval merge = `--admin`**),
   alerts the private ops channel (with SHA) + opens a **SHA-free** public issue.
 
-Drop this into each public repo (**pin both by commit SHA** — a floating ref is a
-check-name-spoof vector; the gate self-checks and warns if you don't):
+Drop this into each public repo. **Pin both by 40-hex commit SHA** — a branch/tag
+ref is movable (check-name-spoof + it would select the engine too), and the gate
+now **fails closed** if it cannot resolve an immutable engine SHA. **Pass only the
+named secrets** — never `secrets: inherit` (that hands every caller secret to the
+reusable workflow; scope the blast radius to just what the gate needs):
 
 ```yaml
 # .github/workflows/confidentiality.yml
 name: confidentiality
 on:
-  pull_request:
+  pull_request:            # NOT pull_request_target — the gate refuses it (fail-open/secret-exposure footgun)
   push:
     branches: [main]
   schedule:
@@ -151,11 +154,14 @@ on:
 jobs:
   gate:
     uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@<PIN-40-HEX-SHA>
-    secrets: inherit        # passes MF_CONFIDENTIALITY_DENYLIST (+ optional CONF_DENYLIST_PEPPER)
+    secrets:
+      MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+      CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}   # optional; omit if unused
   alert:
     if: ${{ github.event_name == 'push' }}
     uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@<PIN-40-HEX-SHA>
-    secrets: inherit        # passes MF_OPS_DISCORD_WEBHOOK
+    secrets:
+      MF_OPS_DISCORD_WEBHOOK: ${{ secrets.MF_OPS_DISCORD_WEBHOOK }}
 ```
 
 Then add the observed `confidentiality-gate` check to the repo's **required
@@ -169,11 +175,22 @@ compass rollout tooling).
 - **Fork PR → DEGRADED mode**: the org secret is unavailable to forks by design,
   so the gate runs **tiers 1+2 only** and emits a visible `::notice::`. A maintainer
   **must** run the full-denylist local gate before merging a fork PR (SOP OD-2).
-- **gitleaks (tier 1)** is pinned by version **and sha256-verified**, then cached —
-  a release-download flake can't fail checks org-wide (the tier is skipped, tiers
-  2+3 still gate). A sha256 **mismatch** skips tier 1 rather than running an
-  unverified binary.
+- **gitleaks (tier 1)** is pinned by version **and sha256-verified on every run,
+  including cache restores** — the tarball is re-verified before use and the binary
+  re-extracted from it, so a poisoned cache cannot slip an unverified binary past the
+  pin. A download flake or sha256 **mismatch** skips tier 1 (tiers 2+3 still gate)
+  rather than running an unverified/tampered binary. gitleaks runs against a
+  **pinned trusted config** (`--gitleaks-config`), so an in-tree `.gitleaks.toml`
+  in the caller repo cannot disable tier 1.
+- The scan runs `bun` from a **trusted working directory** (`runner.temp`), never
+  the caller checkout, and scans the tree via `--target` — so a `bunfig.toml`
+  (`preload`) planted in a PR cannot execute code in the secret-bearing gate job.
 - Findings are **masked** by the engine (no matched literal, no digest);
   `::add-mask::` registers raw matches with the runner before any finding line.
-- The engine is checked out at the **same ref the gate was pinned to**
-  (`job_workflow_ref`), so a SHA-pinned caller gets a SHA-matched engine.
+- **Diff mode is fail-closed**: the gate fetches and verifies the PR base ref and
+  asserts the scan range covers the PR's changed files — a git/fetch error or an
+  empty range never reads as "clean."
+- The engine is checked out at the **immutable commit SHA** GitHub resolved for the
+  reusable-workflow file (`github.job_workflow_sha`), so the engine is byte-matched
+  to the gate. A movable tag or floating `main` can no longer select the engine; the
+  gate fails closed if it cannot resolve a 40-hex commit.
