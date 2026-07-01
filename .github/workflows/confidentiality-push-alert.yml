@@ -1,0 +1,126 @@
+# Reusable push-alert (design doc §4 L5). Called on push to the default branch.
+# Detects merge-bypass paths and alerts — the only detective control on the
+# bypass path (the exact route of the incident's 3 PRs):
+#   - forced push          (github.event.forced)
+#   - direct push          (head commit has no associated merged PR)
+#   - zero-approval merge  (associated PR merged with 0 approvals ⇒ --admin bypass, G6)
+#
+# Alert channels:
+#   - PRIVATE Discord webhook (org secret) — may carry actor + type + SHA + branch.
+#   - PUBLIC issue in the caller repo — actor + type ONLY, deliberately SHA-FREE
+#     (a public before-SHA is a retrieval handle to scrubbed content). Title only.
+#
+# A normal squash merge with ≥1 approval is SILENT.
+name: confidentiality-push-alert
+
+on:
+  workflow_call:
+    secrets:
+      MF_OPS_DISCORD_WEBHOOK:
+        description: "Private ops Discord webhook (org secret, selected public repos). SHA-bearing alert goes here."
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  push-alert:
+    runs-on: ubuntu-latest
+    # Only the default branch matters here.
+    if: ${{ github.ref_name == github.event.repository.default_branch }}
+    steps:
+      - name: Detect merge-bypass
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          FORCED: ${{ github.event.forced }}
+        run: |
+          set -euo pipefail
+          BYPASS=""
+          [ "${FORCED}" = "true" ] && BYPASS="forced-push"
+
+          PRJSON="$(gh api "repos/${REPO}/commits/${SHA}/pulls" -H "Accept: application/vnd.github+json" 2>/dev/null || echo '[]')"
+          PRNUM="$(echo "$PRJSON" | jq -r --arg sha "$SHA" '[.[] | select(.merged_at != null and .merge_commit_sha == $sha)][0].number // empty')"
+          ANYPR="$(echo "$PRJSON" | jq -r 'length')"
+
+          if [ -z "$PRNUM" ]; then
+            # No PR whose merge commit is this SHA. If the commit is associated with
+            # NO PR at all, it is a direct push to the default branch.
+            [ "$ANYPR" = "0" ] && BYPASS="${BYPASS:+$BYPASS,}direct-push"
+          else
+            APPROVALS="$(gh api "repos/${REPO}/pulls/${PRNUM}/reviews" --paginate 2>/dev/null | jq '[.[] | select(.state=="APPROVED")] | length' 2>/dev/null || echo 0)"
+            if [ "${APPROVALS:-0}" -eq 0 ]; then
+              BYPASS="${BYPASS:+$BYPASS,}zero-approval-merge(PR#${PRNUM})"
+            fi
+          fi
+
+          if [ -n "$BYPASS" ]; then
+            echo "bypass=$BYPASS" >> "$GITHUB_OUTPUT"
+            echo "::warning::merge-bypass detected on default branch: $BYPASS"
+          else
+            echo "bypass=" >> "$GITHUB_OUTPUT"
+            echo "::notice::no merge-bypass — normal reviewed merge (silent)"
+          fi
+
+      - name: Private Discord alert (SHA-bearing, ops channel)
+        if: ${{ steps.detect.outputs.bypass != '' }}
+        env:
+          WEBHOOK: ${{ secrets.MF_OPS_DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          SHA: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          BYPASS: ${{ steps.detect.outputs.bypass }}
+        run: |
+          set -euo pipefail
+          if [ -z "${WEBHOOK:-}" ]; then
+            echo "::warning::MF_OPS_DISCORD_WEBHOOK unset — private ops alert not sent (public SHA-free issue still filed)"
+            exit 0
+          fi
+          MSG="⚠ merge-bypass on \`${REPO}\`@${BRANCH}: **${BYPASS}** by ${ACTOR} (commit ${SHA}). Verify this was an intentional break-glass; if not, treat as an unreviewed change to a public repo."
+          curl -sS -X POST -H "Content-Type: application/json" \
+            --data "$(jq -nc --arg c "$MSG" '{content:$c}')" "$WEBHOOK" >/dev/null \
+            && echo "posted private ops alert" || echo "::warning::failed to post Discord alert"
+
+      - name: Public SHA-free issue (caller repo)
+        if: ${{ steps.detect.outputs.bypass != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+          BRANCH: ${{ github.ref_name }}
+          BYPASS: ${{ steps.detect.outputs.bypass }}
+        run: |
+          set -euo pipefail
+          TITLE="Merge-bypass alert: ${BYPASS} on ${BRANCH} by ${ACTOR}"
+          # De-dupe: skip if an open issue with this exact title already exists.
+          EXISTING="$(gh issue list --repo "$REPO" --state open --json title -q "[.[] | select(.title == \"$TITLE\")] | length" 2>/dev/null || echo 0)"
+          if [ "${EXISTING:-0}" != "0" ]; then
+            echo "open bypass-alert issue already exists — not duplicating"
+            exit 0
+          fi
+          # Body via printf → file (no SHA anywhere). --body-file avoids YAML/shell quoting hazards.
+          printf 'A push to the default branch bypassed the normal review path: **%s**.\n\n- Actor: %s\n- Branch: %s\n\nThis issue is intentionally **SHA-free** — a public before-SHA is a retrieval handle to scrubbed content. The commit SHA + details were sent to the private ops channel. If this was not an intentional, logged break-glass, review the change for confidentiality exposure (design doc L5 / OD-1).\n\n<!-- mf-bypass-alert -->\n' \
+            "$BYPASS" "$ACTOR" "$BRANCH" > "$RUNNER_TEMP/bypass-body.md"
+          gh issue create --repo "$REPO" --title "$TITLE" --body-file "$RUNNER_TEMP/bypass-body.md" \
+            && echo "opened SHA-free bypass-alert issue" || echo "::warning::failed to open issue (check issues:write permission)"
+
+      - name: Caller integrity re-verify (advisory)
+        if: ${{ always() }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Check gate caller is SHA-pinned
+        if: ${{ always() }}
+        run: |
+          set -uo pipefail
+          HITS="$(grep -RIl "metafactory-actions/.github/workflows/confidentiality-gate.yml" .github/workflows 2>/dev/null || true)"
+          # shellcheck disable=SC2086  # $HITS is an intentional space-separated file list
+          if [ -n "$HITS" ] && ! grep -RhoE "metafactory-actions/.github/workflows/confidentiality-gate.yml@[0-9a-f]{40}" $HITS >/dev/null 2>&1; then
+            echo "::warning::post-merge caller integrity: the confidentiality-gate reference is NOT pinned by a 40-hex commit SHA."
+          fi

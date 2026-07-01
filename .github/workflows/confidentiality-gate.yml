@@ -1,0 +1,189 @@
+# Reusable confidentiality gate (design doc §4 L1). Called by every public repo
+# as a required status check. Runs the shared scan engine in the right mode for
+# the caller's event, with a pinned+cached+sha256-verified gitleaks (tier 1),
+# public shape patterns (tier 2), and the org-secret hashed denylist (tier 3).
+#
+# Fail-closed: a same-repo run without the denylist secret HARD-FAILS; a fork PR
+# runs tiers 1+2 in a visible DEGRADED mode (never fails open silently). Findings
+# are masked by the engine (no matched literal / no digest); `::add-mask::` is
+# emitted before any finding line.
+#
+# Caller usage: see README "Confidentiality gate — caller usage".
+name: confidentiality-gate
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "diff | tree | history | auto (auto ⇒ pull_request→diff, push→tree, schedule/dispatch→history)"
+        type: string
+        required: false
+        default: "auto"
+      gitleaks_version:
+        type: string
+        required: false
+        default: "8.18.4"
+      gitleaks_sha256:
+        description: "sha256 of gitleaks_<ver>_linux_x64.tar.gz (verified before use; mismatch ⇒ tier 1 skipped, never a tampered run)"
+        type: string
+        required: false
+        default: "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d"
+      engine_ref:
+        description: "Fallback ref of the-metafactory/metafactory-actions for the engine when job_workflow_ref can't be parsed."
+        type: string
+        required: false
+        default: "main"
+    secrets:
+      MF_CONFIDENTIALITY_DENYLIST:
+        description: "Salted-SHA-256 hashed denylist (org secret, selected public repos). Absent on fork PRs ⇒ degraded."
+        required: false
+      CONF_DENYLIST_PEPPER:
+        description: "Optional 2nd denylist secret; must match whatever built the denylist."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  confidentiality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pin the ENGINE to the same ref the gate itself was invoked at, so a
+      # SHA-pinned caller gets a SHA-matched engine (not a floating main).
+      - name: Resolve engine ref
+        env:
+          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+          FALLBACK: ${{ inputs.engine_ref }}
+        run: |
+          REF="${JOB_WORKFLOW_REF##*@}"
+          [ -z "$REF" ] && REF="$FALLBACK"
+          echo "ENGINE_REF=$REF" >> "$GITHUB_ENV"
+          echo "::notice::confidentiality-gate engine ref = $REF"
+
+      - name: Checkout scan engine (metafactory-actions)
+        uses: actions/checkout@v4
+        with:
+          repository: the-metafactory/metafactory-actions
+          ref: ${{ env.ENGINE_REF }}
+          path: _scan_engine
+
+      - name: Caller integrity (advisory SHA-pin check)
+        run: |
+          set -euo pipefail
+          HITS="$(grep -RIl "metafactory-actions/.github/workflows/confidentiality-gate.yml" .github/workflows 2>/dev/null || true)"
+          # shellcheck disable=SC2086  # $HITS is an intentional space-separated file list
+          if [ -z "$HITS" ]; then
+            echo "::warning::caller integrity: no reference to the reusable confidentiality-gate found in .github/workflows (unexpected)"
+          elif grep -RhoE "metafactory-actions/.github/workflows/confidentiality-gate.yml@[0-9a-f]{40}" $HITS >/dev/null 2>&1; then
+            echo "::notice::caller integrity: gate is pinned by commit SHA ✓"
+          else
+            echo "::warning::caller integrity: the gate reference is NOT pinned by a 40-hex commit SHA — pin it (SOP) to close the check-name-spoof / floating-ref vector."
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache gitleaks
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gitleaks
+          key: gitleaks-${{ inputs.gitleaks_version }}-linux-x64
+
+      - name: Setup gitleaks (pinned + sha256-verified, best-effort)
+        env:
+          GL_VER: ${{ inputs.gitleaks_version }}
+          GL_SHA: ${{ inputs.gitleaks_sha256 }}
+        run: |
+          set -uo pipefail
+          GL_DIR="${{ runner.temp }}/gitleaks"
+          if [ ! -x "$GL_DIR/gitleaks" ]; then
+            mkdir -p "$GL_DIR"
+            TARBALL="$GL_DIR/gitleaks.tar.gz"
+            URL="https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz"
+            if curl -sSL --retry 3 --retry-delay 2 --max-time 60 -o "$TARBALL" "$URL"; then
+              if ! echo "${GL_SHA}  ${TARBALL}" | sha256sum -c - ; then
+                echo "::warning::gitleaks sha256 MISMATCH for v${GL_VER} — refusing to run an unverified binary; tier 1 skipped (tiers 2+3 still gate)"
+                rm -f "$TARBALL"; exit 0
+              fi
+              tar -xzf "$TARBALL" -C "$GL_DIR" gitleaks || { echo "::warning::gitleaks extract failed — tier 1 skipped"; exit 0; }
+            else
+              echo "::warning::gitleaks download failed (flake) — tier 1 skipped; the cache prevents a repeat next run"
+              exit 0
+            fi
+          fi
+          if [ -x "$GL_DIR/gitleaks" ]; then
+            echo "MF_GITLEAKS_BIN=$GL_DIR/gitleaks" >> "$GITHUB_ENV"
+            echo "$GL_DIR" >> "$GITHUB_PATH"
+          fi
+
+      - name: Gate policy (fail-closed on same-repo missing denylist)
+        env:
+          DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DENYLIST:-}" ]; then
+            if [ "${IS_FORK}" = "true" ]; then
+              echo "::notice::confidentiality-gate DEGRADED — fork PR: the denylist secret is unavailable to forks. Running tiers 1+2 only. A maintainer MUST run the full-denylist local gate before merging this fork PR (SOP OD-2)."
+            else
+              echo "::error::confidentiality-gate: MF_CONFIDENTIALITY_DENYLIST secret is ABSENT on a same-repo run. Add this repo to the org secret's visibility list (Settings ▸ Secrets ▸ Actions ▸ MF_CONFIDENTIALITY_DENYLIST ▸ selected public repos). Failing closed."
+              exit 1
+            fi
+          fi
+
+      - name: Determine scan mode
+        env:
+          MODE_IN: ${{ inputs.mode }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          MODE="$MODE_IN"
+          if [ -z "$MODE" ] || [ "$MODE" = "auto" ]; then
+            case "$EVENT" in
+              pull_request|pull_request_target) MODE="diff" ;;
+              push) MODE="tree" ;;
+              schedule|workflow_dispatch) MODE="history" ;;
+              *) MODE="tree" ;;
+            esac
+          fi
+          echo "SCAN_MODE=$MODE" >> "$GITHUB_ENV"
+          echo "::notice::confidentiality-gate mode=$MODE (event=$EVENT)"
+
+      - name: Fetch PR base (diff mode)
+        if: ${{ env.SCAN_MODE == 'diff' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${BASE_REF:-}" ] && git fetch --no-tags --prune origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}" || true
+
+      - name: Run confidentiality scan
+        env:
+          # Secrets → env (never interpolated into the script body).
+          MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+          CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}
+          # Attacker-controllable PR metadata → env only (avoids script injection).
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          ENGINE="_scan_engine/scan/confidentiality-scan.ts"
+          PATTERNS="_scan_engine/scan/public-patterns.yaml"
+          ARGS=("$SCAN_MODE" --patterns "$PATTERNS")
+          if [ "$SCAN_MODE" = "diff" ]; then
+            ARGS+=(--range "origin/${BASE_REF}...HEAD")
+            [ -n "${PR_TITLE:-}" ] && ARGS+=(--extra-text "$PR_TITLE")
+            [ -n "${PR_BODY:-}" ] && ARGS+=(--extra-text "$PR_BODY")
+            [ -n "${HEAD_BRANCH:-}" ] && ARGS+=(--extra-text "$HEAD_BRANCH")
+          fi
+          echo "running: bun $ENGINE ${ARGS[*]}"
+          bun "$ENGINE" "${ARGS[@]}"

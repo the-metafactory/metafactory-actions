@@ -122,3 +122,58 @@ This repo replaces actions previously scattered across:
 - `pulse/examples/` (next-pick, ecosystem-digest, arc-upgrade, sync-repos, rss-pipeline)
 - `ecosystem-digest` (standalone repo)
 - `handover-digest` (standalone repo)
+
+## Confidentiality gate — caller usage
+
+Two **reusable workflows** (design doc §4 L1/L5, umbrella compass#81) that every
+public repo calls to keep client-confidential content out of the tree, the
+history, and the merge-bypass path. They drive the shared scan engine in
+[`scan/`](scan/README.md).
+
+- `.github/workflows/confidentiality-gate.yml` — required status check. Runs the
+  engine in `diff` mode on PRs, `tree` on push, `history` on schedule.
+- `.github/workflows/confidentiality-push-alert.yml` — detects merge-bypass on the
+  default branch (forced push, direct push, **zero-approval merge = `--admin`**),
+  alerts the private ops channel (with SHA) + opens a **SHA-free** public issue.
+
+Drop this into each public repo (**pin both by commit SHA** — a floating ref is a
+check-name-spoof vector; the gate self-checks and warns if you don't):
+
+```yaml
+# .github/workflows/confidentiality.yml
+name: confidentiality
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"   # weekly history scan
+jobs:
+  gate:
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@<PIN-40-HEX-SHA>
+    secrets: inherit        # passes MF_CONFIDENTIALITY_DENYLIST (+ optional CONF_DENYLIST_PEPPER)
+  alert:
+    if: ${{ github.event_name == 'push' }}
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@<PIN-40-HEX-SHA>
+    secrets: inherit        # passes MF_OPS_DISCORD_WEBHOOK
+```
+
+Then add the observed `confidentiality-gate` check to the repo's **required
+status checks** (the exact context name is read from the first run — see the
+compass rollout tooling).
+
+### Degraded-fork contract (never fails open silently)
+
+- **Same-repo run without the denylist secret → HARD FAIL** naming the org-secret
+  visibility list. The denylist tier is never silently skipped on a trusted run.
+- **Fork PR → DEGRADED mode**: the org secret is unavailable to forks by design,
+  so the gate runs **tiers 1+2 only** and emits a visible `::notice::`. A maintainer
+  **must** run the full-denylist local gate before merging a fork PR (SOP OD-2).
+- **gitleaks (tier 1)** is pinned by version **and sha256-verified**, then cached —
+  a release-download flake can't fail checks org-wide (the tier is skipped, tiers
+  2+3 still gate). A sha256 **mismatch** skips tier 1 rather than running an
+  unverified binary.
+- Findings are **masked** by the engine (no matched literal, no digest);
+  `::add-mask::` registers raw matches with the runner before any finding line.
+- The engine is checked out at the **same ref the gate was pinned to**
+  (`job_workflow_ref`), so a SHA-pinned caller gets a SHA-matched engine.
