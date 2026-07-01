@@ -17,11 +17,13 @@ import {
   scanContentForDenylist,
   scanContentForShapes,
   scanLineForShapes,
+  type Finding,
   type HashedDenylist,
   type ShapePattern,
 } from "./engine.ts";
 import {
   decideExit,
+  expandMasks,
   loadDenylist,
   loadPatterns,
   parseArgs,
@@ -74,6 +76,7 @@ function opts(overrides: Partial<Options> = {}): Options {
     json: false,
     cwd: process.cwd(),
     pepper: "",
+    requireDenylist: false,
     ...overrides,
   };
 }
@@ -558,5 +561,238 @@ describe("install-hooks: hooksPath shadowing detection (G17)", () => {
   test("doctor FAILS (non-zero) when a --repo has a shadowing local hooksPath", () => {
     const code = runInstaller(["doctor", "--repo", shadowed]);
     expect(code).not.toBe(0);
+  });
+});
+
+// ===========================================================================
+// Adversarial review #9 — regression fixes (1..8) + golden-vector parity lock.
+// All forbidden-shaped strings are BUILT AT RUNTIME so this file stays scan-clean.
+// ===========================================================================
+
+/** Make a throwaway git repo with commit signing off. */
+function tmpRepo(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  git(["init", "-q"], d);
+  git(["config", "user.email", "t@example.com"], d);
+  git(["config", "user.name", "t"], d);
+  git(["config", "commit.gpgsign", "false"], d);
+  return d;
+}
+
+/** True iff `fn` rejects (optionally with a message matching `re`). */
+async function rejects(fn: () => Promise<unknown>, re?: RegExp): Promise<boolean> {
+  try {
+    await fn();
+    return false;
+  } catch (e) {
+    return re ? re.test((e as Error).message) : true;
+  }
+}
+
+describe("fix1: git-plumbing failure fails CLOSED (exit 3), never a silent green", () => {
+  let repo: string;
+  beforeAll(() => {
+    repo = tmpRepo("mfa-fix1-");
+    mkdirSync(join(repo, "src"), { recursive: true });
+    // A real leak sits in the committed tree — a broken scan must NOT report clean.
+    writeFileSync(join(repo, "src", "a.ts"), `const mail = "${INTERNAL_EMAIL}";\n`);
+    git(["add", "-A"], repo);
+    git(["commit", "-qm", "seed"], repo);
+  });
+  afterAll(() => rmSync(repo, { recursive: true, force: true }));
+
+  test("bogus --range throws → exit 3 (leak in tree, yet git diff errors)", async () => {
+    const o = opts({ mode: "diff", range: "no-such-ref-aaa...no-such-ref-bbb", cwd: repo });
+    expect(await rejects(() => runScan(o), /git diff failed/i)).toBe(true);
+  });
+  test("shallow-checkout simulation: origin/main absent → throws (not clean exit 0)", async () => {
+    const o = opts({ mode: "diff", range: "origin/main...HEAD", cwd: repo });
+    expect(await rejects(() => runScan(o))).toBe(true);
+  });
+  test("tree mode in a non-git directory throws (ls-files fails closed)", async () => {
+    const nonGit = mkdtempSync(join(tmpdir(), "mfa-fix1-nogit-"));
+    try {
+      writeFileSync(join(nonGit, "leak.ts"), `const mail = "${INTERNAL_EMAIL}";\n`);
+      expect(await rejects(() => runScan(opts({ mode: "tree", cwd: nonGit })), /ls-files/i)).toBe(true);
+    } finally {
+      rmSync(nonGit, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fix2: expandMasks splits multi-line secrets so no line leaks raw", () => {
+  test("every line of a multi-line secret becomes its own mask; blanks dropped; deduped", () => {
+    const secret = ["-----BEGIN KEY-----", "LINE2SECRET", "LINE3SECRET", "-----END KEY-----"].join("\n");
+    const out = expandMasks([secret, "singleLineToken", "", "  "]);
+    expect(out).toContain("LINE2SECRET");
+    expect(out).toContain("LINE3SECRET");
+    expect(out).toContain("-----END KEY-----");
+    expect(out).toContain("singleLineToken");
+    expect(out).not.toContain(""); // blank / whitespace-only lines never masked
+    // CRLF handled + dedup across lines:
+    expect(expandMasks(["dup\r\ndup"]).filter((x) => x === "dup")).toHaveLength(1);
+  });
+});
+
+describe("fix3: internal-email catches subdomains (still rejects lookalikes)", () => {
+  const P3 = () => [findPattern("internal-email")];
+  const BRAND = ["meta", "factory"].join("-"); // "meta-factory" assembled at runtime
+  test("subdomain addresses at a brand domain are flagged", () => {
+    for (const host of [`ci.${BRAND}.dev`, `mail.${BRAND}.ai`, `sub.dept.${BRAND}.io`]) {
+      const addr = "u" + "@" + host; // never a full literal in source
+      expect(scanContentForShapes(`x="${addr}"`, "src/app.ts", P3()).findings.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+  test("apex still flagged; a lookalike domain is NOT (no over-broadening)", () => {
+    expect(scanContentForShapes(`x="u${"@"}${BRAND}.ai"`, "src/app.ts", P3()).findings).toHaveLength(1);
+    expect(scanContentForShapes(`x="u${"@"}evil-${BRAND}.ai"`, "src/app.ts", P3()).findings).toHaveLength(0);
+  });
+});
+
+describe("fix4: platform-ID catches word-glued forms; 21+ digits still match nothing", () => {
+  const P4 = () => [findPattern("platform-snowflake")];
+  test("underscore/letter-glued 18-digit IDs are flagged", () => {
+    for (const s of [`webhook_${SNOWFLAKE_18}`, `guildId${SNOWFLAKE_18}`, `id:${SNOWFLAKE_18}`, `${SNOWFLAKE_18}`]) {
+      expect(scanLineForShapes(s, 1, "f.ts", P4()).findings.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+  test("21+ digit runs match nothing (not a snowflake; no sub-slice flagged)", () => {
+    const long = Array.from({ length: 24 }, (_, i) => String((i % 9) + 1)).join(""); // 24 digits
+    expect(scanLineForShapes(`x=${long}`, 1, "f.ts", P4()).findings).toHaveLength(0);
+  });
+  test("all-same-digit placeholder stays allowed even when word-glued", () => {
+    expect(scanLineForShapes(`id_${"7".repeat(18)}`, 1, "f.ts", P4()).findings).toHaveLength(0);
+  });
+});
+
+describe("fix7: compliance-code is case-insensitive; carve-outs inherit the case-fold", () => {
+  const cp = () => findPattern("compliance-code");
+  const mk = (org: string, n: string) => ["STD", org, "AI", n].join("-"); // runtime-built
+  test("lowercase / mixed-case codes are flagged", () => {
+    for (const code of [mk("XY", "001").toLowerCase(), mk("Np", "014"), mk("ABCD", "999")]) {
+      expect(scanLineForShapes(`c: ${code}`, 1, "docs/x.md", [cp()]).findings.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+  test("a lowercase sanctioned placeholder is STILL carved out (allow inherits `i`)", () => {
+    const exLower = mk("EX", "001").toLowerCase();
+    expect(scanLineForShapes(exLower, 1, "f", [cp()]).findings).toHaveLength(0);
+  });
+});
+
+describe("fix5: oversized files are surfaced as findings, never silently skipped", () => {
+  test("tree mode: a >1MB file yields a visible non-clean 'oversize-unscanned' finding + notice", async () => {
+    const dir = tmpRepo("mfa-fix5-");
+    try {
+      writeFileSync(join(dir, "big.ts"), "x".repeat(1_000_001)); // >1MB, no shape inside
+      git(["add", "-A"], dir);
+      const r = await runScan(opts({ mode: "tree", cwd: dir }));
+      const f = r.findings.find((x) => x.ruleId === "oversize-unscanned");
+      expect(f).toBeTruthy();
+      expect(r.notices.join("\n")).toContain("exceeded the");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  test("oversize under a sensitive path BLOCKs", async () => {
+    const dir = tmpRepo("mfa-fix5b-");
+    try {
+      mkdirSync(join(dir, "seeds"), { recursive: true });
+      writeFileSync(join(dir, "seeds", "big.sql"), "x".repeat(1_000_001));
+      git(["add", "-A"], dir);
+      const r = await runScan(opts({ mode: "tree", cwd: dir }));
+      const f = r.findings.find((x) => x.ruleId === "oversize-unscanned");
+      expect(f?.action).toBe("block");
+      expect(decideExit(r.findings, opts({ mode: "tree", cwd: dir }))).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("fix6: dedupe preserves EVERY mask (gitleaks emits 2 masks / 1 finding)", () => {
+  const f = (file: string): Finding => ({ tier: 1, ruleId: "r", class: "c", action: "block", file, line: 1, descriptor: "d" });
+  test("a tail mask is never dropped because masks outnumber findings", () => {
+    const findings = [f("a"), f("b"), f("c")];
+    const masks = ["SECRET", "MATCH", "SHAPE_A_LITERAL", "SHAPE_B_LITERAL"]; // 4 masks, 3 findings
+    const d = dedupe({ findings, masks });
+    expect(d.masks).toContain("SHAPE_B_LITERAL"); // previously silently dropped
+    expect(d.masks).toHaveLength(4);
+  });
+  test("duplicate findings still collapse; their masks are still preserved for masking", () => {
+    const d = dedupe({ findings: [f("a"), f("a")], masks: ["M1", "M2"] });
+    expect(d.findings).toHaveLength(1);
+    expect(d.masks).toHaveLength(2);
+  });
+});
+
+describe("fix8: --require-denylist enforces tier 3 on the trusted path", () => {
+  test("inert denylist + requireDenylist → runScan throws (=> exit 3)", async () => {
+    // The enforce check runs before any mode scan, so no git repo is needed.
+    expect(await rejects(() => runScan(opts({ mode: "diff", requireDenylist: true })), /require-denylist/i)).toBe(true);
+  });
+  test("populated denylist + requireDenylist → runs, tier 3 active", async () => {
+    const dl = buildHashedDenylist("s", [{ id: "c-1", term: "zzsyntheticorg", class: "client-name" }]);
+    process.env.MF_CONFIDENTIALITY_DENYLIST = JSON.stringify(dl);
+    const dir = tmpRepo("mfa-fix8-");
+    try {
+      const r = await runScan(opts({ mode: "tree", requireDenylist: true, cwd: dir }));
+      expect(r.tiersRun).toContain(3);
+    } finally {
+      delete process.env.MF_CONFIDENTIALITY_DENYLIST;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GOLDEN VECTORS — the canon+hash contract, pinned. Any change to canon() or
+// hashToken() (or a reordering that changes output) FAILS here, catching silent
+// divergence from the compass #101 denylist tooling. Salt/pepper are fixed,
+// public test constants (NOT secrets). Digests computed from THIS engine and
+// frozen; #101 must produce byte-identical values for the same {salt,term}.
+// ---------------------------------------------------------------------------
+describe("GOLDEN VECTORS — canon + sha256(salt:canon) parity lock (#101 contract)", () => {
+  const SALT = "golden-salt-v1";
+  const PEP = "golden-pepper";
+  const V: Array<{ label: string; in: string; canon: string; len: number; hash: string }> = [
+    { label: "multi-word", in: ["Zeta", "Nimbus"].join(" "), canon: "zetanimbus", len: 10, hash: "f0196e3a7ae2c4ce00a58d15070e3e6c5f4054da0b995c3b855f1a0012954979" },
+    { label: "hyphenated", in: "zeta-nimbus", canon: "zetanimbus", len: 10, hash: "f0196e3a7ae2c4ce00a58d15070e3e6c5f4054da0b995c3b855f1a0012954979" },
+    { label: "camelCase", in: "ZetaNimbus", canon: "zetanimbus", len: 10, hash: "f0196e3a7ae2c4ce00a58d15070e3e6c5f4054da0b995c3b855f1a0012954979" },
+    { label: "snake_case", in: "acme_corp", canon: "acmecorp", len: 8, hash: "6c29a44ab609753f0c0f3df064b426eedefd3592a0377d8868f95165ee017710" },
+    { label: "three-word", in: ["Foo", "Bar", "Baz"].join(" "), canon: "foobarbaz", len: 9, hash: "196443fa77ba17ae32a49e68751a4845fb24ac3c37f243b32c82e7e628221366" },
+    { label: "digit-boundary", in: "Zeta2Nimbus", canon: "zeta2nimbus", len: 11, hash: "c083597db4275b52c287ec165cdbc7a2381223dbabcbea5a0bd89efabfb7961a" },
+    // NFD input (e + U+0301 combining acute) MUST NFC-compose before hashing:
+    { label: "NFD-accented", in: "café", canon: "café", len: 4, hash: "f1100e4b38eadc0b7eee839a6e3c83499e53e36f0c1c39ca6fb544f7779ee30d" },
+    { label: "precomposed+digits+symbol", in: "Nödl-42", canon: "nödl42", len: 6, hash: "04dad61b5f51d17a4d7769669b3e82d5693788b39c68a56b2cb4db402358c27e" },
+  ];
+  test("canon() produces exactly the pinned form + length for every vector", () => {
+    for (const v of V) {
+      expect(canon(v.in)).toBe(v.canon);
+      expect(canon(v.in).length).toBe(v.len); // UTF-16 code-unit length (parity note)
+    }
+  });
+  test("hashToken(SALT, canon) matches the pinned digest for every vector", () => {
+    for (const v of V) expect(hashToken(SALT, canon(v.in))).toBe(v.hash);
+  });
+  test("peppered digest (salt:pepper:canon) is pinned", () => {
+    expect(hashToken(SALT, canon(["Zeta", "Nimbus"].join(" ")), PEP)).toBe(
+      "339fd35e0d36e7eb14038695752098880200646ca24763d9b9b15cbd7a227fe6"
+    );
+  });
+  test("buildHashedDenylist reproduces the pinned hash+len end-to-end", () => {
+    const dl = buildHashedDenylist(SALT, [{ id: "g-1", term: ["Zeta", "Nimbus"].join(" "), class: "client-name" }]);
+    expect(dl.entries[0].hash).toBe("f0196e3a7ae2c4ce00a58d15070e3e6c5f4054da0b995c3b855f1a0012954979");
+    expect(dl.entries[0].len).toBe(10);
+  });
+  test("NFC composition is locked: NFD and NFC spellings hash identically (from escapes)", () => {
+    // Built from code points so this assertion carries no accented literal and is
+    // encoding-robust. If canon() ever drops NFC normalization, these diverge.
+    const nfd = "cafe" + String.fromCodePoint(0x0301); // e + combining acute (5 code units)
+    const nfc = "caf" + String.fromCodePoint(0x00e9); // é precomposed (4 code units)
+    expect(canon(nfd)).toBe(canon(nfc));
+    expect(canon(nfd)).toBe(nfc);
+    expect(canon(nfd).length).toBe(4);
+    expect(hashToken(SALT, canon(nfd))).toBe("f1100e4b38eadc0b7eee839a6e3c83499e53e36f0c1c39ca6fb544f7779ee30d");
+    expect(hashToken(SALT, canon(nfd))).toBe(hashToken(SALT, canon(nfc)));
   });
 });

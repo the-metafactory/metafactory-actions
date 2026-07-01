@@ -33,6 +33,7 @@ import {
   scanLineForShapes,
   pathMatchesAny,
   type Finding,
+  type FindingAction,
   type HashedDenylist,
   type ScanChunkResult,
   type ShapePattern,
@@ -73,6 +74,13 @@ export interface Options {
   cwd: string;
   /** Optional 2nd denylist secret; must match whatever built the denylist. From env CONF_DENYLIST_PEPPER. */
   pepper: string;
+  /**
+   * Enforce tier 3: when set, an absent/empty denylist FAILS CLOSED (exit 3)
+   * instead of degrading silently. Set on the TRUSTED (non-fork) CI path so a
+   * mis-wired org secret can't ship green with tier 3 off (review #9 fix 8).
+   * Also settable via env MF_REQUIRE_DENYLIST=1 for hook/CI wiring.
+   */
+  requireDenylist: boolean;
 }
 
 export function parseArgs(argv: string[]): Options {
@@ -88,6 +96,7 @@ export function parseArgs(argv: string[]): Options {
     json: false,
     cwd: process.cwd(),
     pepper: process.env.CONF_DENYLIST_PEPPER || "",
+    requireDenylist: process.env.MF_REQUIRE_DENYLIST === "1",
   };
   const positional = argv.filter((a) => !a.startsWith("-"));
   if (positional[0] && ["diff", "tree", "history"].includes(positional[0])) {
@@ -102,6 +111,7 @@ export function parseArgs(argv: string[]): Options {
     else if (a === "--extra-text") opts.extraText.push(argv[++i] ?? "");
     else if (a === "--no-gitleaks") opts.useGitleaks = false;
     else if (a === "--fail-on-warn") opts.failOnWarn = true;
+    else if (a === "--require-denylist") opts.requireDenylist = true;
     else if (a === "--json") opts.json = true;
     else if (a === "--cwd") opts.cwd = argv[++i] ?? opts.cwd;
   }
@@ -188,6 +198,31 @@ async function readTextFile(path: string): Promise<string | null> {
   return new TextDecoder().decode(buf);
 }
 
+/** True when the on-disk file exceeds the content-scan size cap. */
+async function isOversizeText(path: string): Promise<boolean> {
+  const f = Bun.file(path);
+  return (await f.exists()) && f.size > MAX_FILE_BYTES;
+}
+
+/**
+ * A file too large to content-scan must NOT be skipped silently (review #9 fix
+ * 5): emit a VISIBLE, non-clean finding. `block` under a sensitive path (an
+ * unscanned large seed/persona/agents.d file is a real leak vector), else `warn`.
+ * The path is rendered redacted downstream; no notice carries the raw path.
+ */
+function oversizeFinding(file: string, sensitivePaths: string[]): Finding {
+  const action: FindingAction = pathMatchesAny(file, sensitivePaths) ? "block" : "warn";
+  return {
+    tier: 2,
+    ruleId: "oversize-unscanned",
+    class: "oversize-unscanned-file",
+    action,
+    file,
+    line: 0,
+    descriptor: `file exceeds the ${MAX_FILE_BYTES}-byte scan cap — NOT content-scanned (review manually)`,
+  };
+}
+
 function scanText(content: string, file: string, patterns: ShapePattern[], denylist: HashedDenylist, pepper: string): ScanChunkResult {
   const shapes = scanContentForShapes(content, file, patterns);
   const deny = scanContentForDenylist(content, file, denylist, pepper);
@@ -263,11 +298,20 @@ async function scanDiff(opts: Options, patterns: ShapePattern[], denylist: Hashe
   if (opts.staged) diffArgs.splice(2, 0, "--cached");
   if (opts.range) diffArgs.push(opts.range);
   const diff = sh(diffArgs, opts.cwd);
-  if (diff.code !== 0 && diff.stderr.trim()) notices.push(`git diff: ${diff.stderr.trim().split("\n")[0]}`);
+  // FAIL CLOSED (review #9 fix 1): `git diff` (no --exit-code) returns non-zero
+  // ONLY on error — never merely "there were changes". A non-zero here means the
+  // range/repo is unusable (the common one: a shallow CI checkout where the base
+  // ref `origin/main` was never fetched, so `origin/main...HEAD` errors). Treating
+  // that as "empty diff ⇒ no findings" is a silent green gate that scanned NOTHING.
+  // Throw so main() exits 3 instead of reporting clean.
+  if (diff.code !== 0) {
+    throw new Error(`git diff failed (${diffArgs.join(" ")}): ${diff.stderr.trim().split("\n")[0] || `exit ${diff.code}`} — failing closed`);
+  }
   const parsed = parseUnifiedDiff(diff.stdout);
 
   const findings: Finding[] = [];
   const masks: string[] = [];
+  let oversize = 0;
 
   // (a) added lines
   for (const add of parsed.added) {
@@ -284,6 +328,14 @@ async function scanDiff(opts: Options, patterns: ShapePattern[], denylist: Hashe
   // (b) full content of changed sensitive-path files
   for (const file of parsed.changedFiles) {
     if (!pathMatchesAny(file, SENSITIVE_CONTENT_PATHS)) continue;
+    // The staged read uses `git show` (no size cap — always fully scanned). The
+    // working-tree read is size-capped: never skip a too-large sensitive file
+    // silently (review #9 fix 5) — surface it as a BLOCK finding.
+    if (!opts.staged && (await isOversizeText(join(opts.cwd, file)))) {
+      findings.push(oversizeFinding(file, SENSITIVE_CONTENT_PATHS));
+      oversize++;
+      continue;
+    }
     const content = opts.staged ? sh(["git", "show", `:${file}`], opts.cwd).stdout : await readTextFile(join(opts.cwd, file));
     if (!content) continue;
     const chunk = scanText(content, file, patterns, denylist, opts.pepper);
@@ -310,6 +362,7 @@ async function scanDiff(opts: Options, patterns: ShapePattern[], denylist: Hashe
     masks.push(...chunk.masks);
   }
 
+  if (oversize) notices.push(`${oversize} changed file(s) exceeded the ${MAX_FILE_BYTES}-byte scan cap — reported as findings, NOT content-scanned`);
   return { findings, masks, notices };
 }
 
@@ -318,14 +371,22 @@ async function scanTree(opts: Options, patterns: ShapePattern[], denylist: Hashe
   // Tracked + untracked-not-ignored (so a working tree with staged-but-uncommitted
   // or newly-added files is scanned; .gitignore'd paths like node_modules excluded).
   const ls = sh(["git", "ls-files", "--cached", "--others", "--exclude-standard"], opts.cwd);
+  // FAIL CLOSED (review #9 fix 1): a failed enumeration must not read as "empty
+  // tree ⇒ clean". Throw so main() exits 3.
   if (ls.code !== 0) {
-    notices.push("git ls-files failed — is this a git repo?");
-    return { findings: [], masks: [], notices };
+    throw new Error(`git ls-files failed (not a git repo or git error): ${ls.stderr.trim().split("\n")[0] || `exit ${ls.code}`} — failing closed`);
   }
   const findings: Finding[] = [];
   const masks: string[] = [];
+  let oversize = 0;
   const files = ls.stdout.split("\n").map((s) => s.trim()).filter(Boolean);
   for (const file of files) {
+    if (await isOversizeText(join(opts.cwd, file))) {
+      // Too large to content-scan — never skip silently (review #9 fix 5).
+      findings.push(oversizeFinding(file, SENSITIVE_CONTENT_PATHS));
+      oversize++;
+      continue;
+    }
     const content = await readTextFile(join(opts.cwd, file));
     if (content === null) {
       // Unreadable/binary — flag binaries under sensitive paths (can't tell "new" in tree mode ⇒ warn).
@@ -337,18 +398,20 @@ async function scanTree(opts: Options, patterns: ShapePattern[], denylist: Hashe
     findings.push(...chunk.findings);
     masks.push(...chunk.masks);
   }
+  if (oversize) notices.push(`${oversize} file(s) exceeded the ${MAX_FILE_BYTES}-byte scan cap — reported as findings, NOT content-scanned`);
   return { findings, masks, notices };
 }
 
 async function scanHistory(opts: Options, patterns: ShapePattern[], denylist: HashedDenylist): Promise<{ findings: Finding[]; masks: string[]; notices: string[] }> {
   const notices: string[] = [];
   const rev = sh(["git", "rev-list", "--objects", "--all"], opts.cwd);
+  // FAIL CLOSED (review #9 fix 1): don't treat a rev-list error as "no history".
   if (rev.code !== 0) {
-    notices.push("git rev-list failed — is this a git repo?");
-    return { findings: [], masks: [], notices };
+    throw new Error(`git rev-list failed (not a git repo or git error): ${rev.stderr.trim().split("\n")[0] || `exit ${rev.code}`} — failing closed`);
   }
   const findings: Finding[] = [];
   const masks: string[] = [];
+  let oversize = 0;
   const seen = new Set<string>();
   let count = 0;
   let capped = false;
@@ -369,12 +432,18 @@ async function scanHistory(opts: Options, patterns: ShapePattern[], denylist: Ha
     const cat = sh(["git", "cat-file", "-p", sha], opts.cwd);
     if (cat.code !== 0) continue;
     if (cat.stdout.includes("\0")) continue; // binary blob
-    if (cat.stdout.length > MAX_FILE_BYTES) continue;
+    if (cat.stdout.length > MAX_FILE_BYTES) {
+      // Too large to content-scan — surface, don't skip silently (review #9 fix 5).
+      findings.push(oversizeFinding(path, SENSITIVE_CONTENT_PATHS));
+      oversize++;
+      continue;
+    }
     const chunk = scanText(cat.stdout, path, patterns, denylist, opts.pepper);
     findings.push(...chunk.findings);
     masks.push(...chunk.masks);
   }
   if (capped) notices.push(`history scan capped at ${MAX_HISTORY_BLOBS} blobs (perf cap) — some history not scanned`);
+  if (oversize) notices.push(`${oversize} blob(s) exceeded the ${MAX_FILE_BYTES}-byte scan cap — reported as findings, NOT content-scanned`);
   return { findings, masks, notices };
 }
 
@@ -384,11 +453,21 @@ async function scanHistory(opts: Options, patterns: ShapePattern[], denylist: Ha
 
 export async function runScan(opts: Options): Promise<ScanReport> {
   const patterns = await loadPatterns(opts.patternsPath);
+  // FAIL CLOSED: an empty patterns set means tier 2 would silently do nothing
+  // (e.g. a gutted/empty public-patterns.yaml). Never run with a tier disabled.
+  if (!patterns.length) {
+    throw new Error(`no tier-2 patterns loaded from ${opts.patternsPath} — refusing to run with tier 2 disabled (fail-closed)`);
+  }
   const { denylist, source } = await loadDenylist(opts);
 
   const notices: string[] = [];
   const tiersRun: number[] = [2];
   if (!denylist.salt || !denylist.entries.length) {
+    // Enforce mode (review #9 fix 8): on the trusted path a required-but-absent
+    // denylist must FAIL CLOSED, not degrade to a silent green with tier 3 off.
+    if (opts.requireDenylist) {
+      throw new Error(`--require-denylist set but tier 3 denylist is absent/empty (source=${source}) — failing closed`);
+    }
     notices.push(`tier3 denylist: INERT (source=${source}, no entries) — degraded mode, shape + gitleaks tiers only`);
   } else {
     tiersRun.push(3);
@@ -441,11 +520,29 @@ export function decideExit(findings: Finding[], opts: Options): number {
   return 0;
 }
 
-/** Emit `::add-mask::` for each raw match — GitHub Actions redacts these values in the log. */
+/**
+ * Expand raw matches into the exact set of lines to register with `::add-mask::`.
+ * GitHub Actions' `::add-mask::` command consumes ONLY up to the first newline,
+ * so a multi-line secret (a PEM private key, a cert block — routine gitleaks
+ * `Secret`/`Match` values) would leave lines 2..n printed RAW in the log
+ * (adversarial review #9 fix 2). Split every mask on newlines and register each
+ * non-blank line separately; dedupe across all lines. Exported for testing.
+ */
+export function expandMasks(masks: string[]): string[] {
+  const out = new Set<string>();
+  for (const m of masks) {
+    if (!m) continue;
+    for (const part of m.split(/\r?\n/)) {
+      if (part.trim()) out.add(part);
+    }
+  }
+  return [...out];
+}
+
+/** Emit `::add-mask::` for each raw match line — GitHub Actions redacts these values in the log. */
 function emitCiMasks(masks: string[]): void {
   if (process.env.GITHUB_ACTIONS !== "true") return;
-  const uniq = [...new Set(masks.filter(Boolean))];
-  for (const m of uniq) process.stdout.write(`::add-mask::${m}\n`);
+  for (const line of expandMasks(masks)) process.stdout.write(`::add-mask::${line}\n`);
 }
 
 export function renderReport(report: ScanReport, denylist: HashedDenylist | undefined, opts: Options): string {

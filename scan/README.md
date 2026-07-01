@@ -55,7 +55,19 @@ bun scan/confidentiality-scan.ts diff --staged --json
 
 Flags: `--staged`, `--range <A..B>`, `--denylist <path>`, `--patterns <path>`,
 `--extra-text <str>` (repeatable — PR title/body/branch), `--no-gitleaks`,
-`--fail-on-warn`, `--json`, `--cwd <path>`.
+`--fail-on-warn`, `--require-denylist`, `--json`, `--cwd <path>`.
+
+`--require-denylist` (or env `MF_REQUIRE_DENYLIST=1`) enforces tier 3: an
+absent/empty denylist **fails closed** (exit 3) instead of degrading silently.
+Set it on the **trusted (non-fork) CI path** so a mis-wired org secret can't ship
+a green check with tier 3 off. Leave it OFF for fork PRs (which legitimately run
+degraded, tiers 1+2 only).
+
+**Fail-closed discipline:** any underlying **git** command that errors (bad
+range, non-git dir, shallow checkout where `origin/main` isn't fetched) exits `3`
+— never a false "clean". Files **> 1 MB** are not silently skipped: they surface
+as an `oversize-unscanned` finding (`warn`, or `block` under a sensitive path)
+plus a notice, so a large unscanned blob is always visible.
 
 **Exit codes:** `0` clean · `1` one-or-more BLOCK findings (or a warn with
 `--fail-on-warn`) · `3` engine/config error (fail-closed).

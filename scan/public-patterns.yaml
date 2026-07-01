@@ -15,14 +15,18 @@ version: 1
 patterns:
   # --- Class 6: internal-domain emails -------------------------------------
   # Any address at a metafactory brand domain committed to source is class-6.
-  # Sanctioned system addresses (noreply/support/security) + GitHub noreply are
-  # carved out (design doc L4: "intentional maintainer contact carved out").
+  # The `(?:[A-Za-z0-9-]+\.)*` prefix means a SUBDOMAIN address (ci.meta-factory.dev,
+  # mail.meta-factory.ai) is caught too — subdomains ARE brand domains and are how
+  # internal service mail is written (adversarial review #9 finding 3). It does NOT
+  # widen the domain: `evil-meta-factory.ai` still fails (needs a literal `.` before
+  # `meta-factory`). Sanctioned system addresses (noreply/support/security) + GitHub
+  # noreply are carved out (design doc L4: "intentional maintainer contact carved out").
   - id: internal-email
     class: internal-domain-email
     tier: 2
     action: block
     description: internal-domain email address
-    regex: '[A-Za-z0-9._%+-]+@meta-factory\.(?:ai|dev|io)\b'
+    regex: '[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)*meta-factory\.(?:ai|dev|io)\b'
     flags: gi
     allow:
       - '^(?:noreply|no-reply|support|security|security-noreply|abuse|postmaster)@'
@@ -33,27 +37,36 @@ patterns:
   # (doc's canonical shape is {2,5}) SPECIFICALLY so BOTH sanctioned carve-outs
   # below match the detection shape — a carve-out that the detector never fires
   # on is false comfort (design doc L1 red-team resolution). See engine.test.ts
-  # "carve-out self-test".
+  # "carve-out self-test". Case-INSENSITIVE (flags: gi) — a lowercase or mixed-case
+  # rendering of the same shape is the same leak (adversarial review #9 finding 7);
+  # the allow-list inherits the `i` (engine parsePatternsYaml) so the sanctioned
+  # carve-outs still match whatever the case. (No concrete code is written in this
+  # comment on purpose — the gate runs over its own tree.)
   - id: compliance-code
     class: compliance-code-shape
     tier: 2
     action: block
     description: compliance-code shape (STD-<ORG>-AI-###)
     regex: '\bSTD-[A-Z]{2,8}-AI-\d{3}\b'
-    flags: g
+    flags: gi
     allow:
       - '^STD-EX-AI-\d{3}$'
       - '^STD-EXAMPLE-AI-\d{3}$'
 
   # --- Class 8: live platform IDs (Discord snowflakes) ---------------------
-  # 17–20 digit standalone numeric IDs. Test files ARE in scope (design doc L1:
-  # test-file globs INCLUDED). All-zero and all-same-digit placeholders allowed.
+  # A FULL run of 17–20 digits. `(?<![0-9])...(?![0-9])` (digit-lookaround, not
+  # `\b`) so a run glued to a word char is still caught — `webhook_1234…`,
+  # `guildId1234…`, `id:1234…` all match, where `\b\d{17,20}\b` missed the
+  # underscore/letter-adjacent forms (adversarial review #9 finding 4). The
+  # lookarounds require the run to be a WHOLE digit run, so a 21+-digit number
+  # matches nothing (it is not a snowflake — no sub-slice of a longer run is
+  # flagged). Test files ARE in scope. All-zero / all-same-digit placeholders allowed.
   - id: platform-snowflake
     class: platform-id-shape
     tier: 2
     action: block
     description: 17-20 digit platform ID (non-placeholder)
-    regex: '\b\d{17,20}\b'
+    regex: '(?<![0-9])\d{17,20}(?![0-9])'
     flags: g
     allow:
       - '^0+$'

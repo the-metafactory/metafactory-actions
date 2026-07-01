@@ -236,6 +236,11 @@ export function parsePatternsYaml(text: string): ShapePattern[] {
     if (!flags.includes("g")) flags += "g"; // scanning needs matchAll
     const action: FindingAction = r.action === "warn" ? "warn" : "block";
     const tier = (Number(r.tier) as Tier) || 2;
+    // Carve-outs INHERIT the rule's case-sensitivity: a case-insensitive
+    // detection rule (flags: gi) must have case-insensitive allow-list anchors
+    // too, else a lowercase sanctioned placeholder (std-ex-ai-001) matches the
+    // shape but slips past its carve-out and BLOCKs (adversarial review #9 fix 7).
+    const allowFlags = flags.includes("i") ? "i" : "";
     return {
       id: r.id,
       class: r.class || r.id,
@@ -244,7 +249,7 @@ export function parsePatternsYaml(text: string): ShapePattern[] {
       description: r.description || r.id,
       regex: new RegExp(r.regex, flags),
       paths: r.paths,
-      allow: r.allow.map((a) => new RegExp(a)),
+      allow: r.allow.map((a) => new RegExp(a, allowFlags)),
     } satisfies ShapePattern;
   });
 }
@@ -323,6 +328,22 @@ export function scanLineForShapes(
  *   3. split camelCase (`([a-z0-9])([A-Z])` → `$1 $2`)
  *   4. strip ALL non-alphanumerics, unicode-aware (accented letters/digits kept)
  * "Acme Corp" / "AcmeCorp" / "acme-corp" all canonicalize to "acmecorp".
+ *
+ * PARITY NOTE (adversarial review #9): step 3 runs AFTER step 2, so its `[A-Z]`
+ * never matches — the camelCase split is effectively a no-op. The result is still
+ * correct because step 4 strips the space the split would have inserted, so
+ * `AcmeCorp`→`acmecorp` either way (verified against a split-first reference over
+ * camel/digit/Pascal/NFD probes: no divergence). It is intentionally left as-is to
+ * keep the written steps aligned with the contract's wording — but the invariant
+ * that holds parity is "step 4 removes separators", NOT the split. If compass #101
+ * ever tokenizes on those boundaries instead of windowing, revisit both sides.
+ * The `scan/engine.test.ts` GOLDEN-VECTORS test pins canon+hash so any drift here
+ * (or a reordering that changes output) fails a test.
+ *
+ * `len`/window use UTF-16 code units (String.length / slice) on BOTH the build
+ * (`buildHashedDenylist`) and match sides — internally consistent. If #101 ever
+ * computes `len` as codepoints, astral-plane terms would mis-window; the golden
+ * vectors don't include astral chars, so keep #101 on code-unit lengths.
  */
 export function canon(s: string): string {
   return s
@@ -545,20 +566,26 @@ export function checkNewBinary(
 // Dedupe + rendering
 // ---------------------------------------------------------------------------
 
-/** Dedupe findings by (file,line,ruleId,class). Preserves order; drops parallel masks in lockstep. */
+/**
+ * Dedupe FINDINGS by (file,line,ruleId,class), preserving order. Masks are NOT
+ * index-aligned with findings — `runGitleaks` emits up to TWO masks (Secret +
+ * Match) per ONE finding, so an index-keyed "drop mask[i] when finding[i] is a
+ * dup" (the old behavior) silently dropped the TAIL masks and left real matched
+ * literals unregistered with `::add-mask::` (adversarial review #9 fix 6). Masks
+ * are consumed ONLY by the CI masker, which dedupes them itself, so we preserve
+ * EVERY mask here — a mask must never be dropped because some *finding* at a
+ * shared index was a duplicate.
+ */
 export function dedupe(chunk: ScanChunkResult): ScanChunkResult {
   const seen = new Set<string>();
   const findings: Finding[] = [];
-  const masks: string[] = [];
-  for (let i = 0; i < chunk.findings.length; i++) {
-    const f = chunk.findings[i];
+  for (const f of chunk.findings) {
     const k = `${f.file}:${f.line}:${f.ruleId}:${f.class}`;
     if (seen.has(k)) continue;
     seen.add(k);
     findings.push(f);
-    if (chunk.masks[i] !== undefined) masks.push(chunk.masks[i]);
   }
-  return { findings, masks };
+  return { findings, masks: chunk.masks.filter(Boolean) };
 }
 
 /**
