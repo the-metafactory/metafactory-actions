@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# metafactory confidentiality pre-commit hook (design doc §4 L5).
+#
+# Runs the shared scan engine in diff mode over STAGED changes, then blocks the
+# commit on any BLOCK finding. Because the metafactory install sets a GLOBAL
+# core.hooksPath, this shim first CHAINS to any repo-local hook so existing
+# per-repo hooks are not silently shadowed.
+#
+# Bypass (velocity by design — CI + push-alert are the backstops):
+#   CONFIDENTIALITY_SKIP=1 git commit ...   or   git commit --no-verify
+set -euo pipefail
+
+HOOK_NAME="pre-commit"
+
+# --- chain to a repo-local hook first ---------------------------------------
+REPO_GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
+LOCAL_HOOK="$REPO_GIT_DIR/hooks/$HOOK_NAME"
+if [ -x "$LOCAL_HOOK" ] && [ "$(cd "$(dirname "$LOCAL_HOOK")" && pwd)/$HOOK_NAME" != "$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" ]; then
+  "$LOCAL_HOOK" "$@" || exit $?
+fi
+
+if [ "${CONFIDENTIALITY_SKIP:-0}" = "1" ]; then
+  echo "confidentiality-scan: SKIPPED via CONFIDENTIALITY_SKIP=1 (skip usage is tracked in retro)" >&2
+  exit 0
+fi
+
+# --- resolve the engine ------------------------------------------------------
+MF_SCAN_ENGINE_DEFAULT="__ENGINE_PATH__"   # installer bakes an absolute path here
+ENGINE="${MF_SCAN_ENGINE:-$MF_SCAN_ENGINE_DEFAULT}"
+if [ -z "$ENGINE" ] || [ ! -f "$ENGINE" ]; then
+  ENGINE="$HOME/.config/metafactory/pkg/repos/metafactory-actions/scan/confidentiality-scan.ts"
+fi
+if [ ! -f "$ENGINE" ]; then
+  echo "confidentiality-scan: engine not found ($ENGINE). Set MF_SCAN_ENGINE or run install-hooks. FAILING CLOSED." >&2
+  exit 1
+fi
+
+exec bun "$ENGINE" diff --staged

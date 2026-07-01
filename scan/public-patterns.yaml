@@ -1,0 +1,83 @@
+# public-patterns.yaml — tier-2 public shape patterns for the confidentiality scan engine.
+#
+# PUBLIC-SAFE BY CONSTRUCTION. This file contains only SHAPES (regexes) and the
+# metafactory org's own PUBLIC brand domains. It contains NO client names, NO
+# real emails, NO live platform IDs. Client-specific terms live only in the
+# PRIVATE hashed denylist delivered at runtime (tier 3) — never here.
+#
+# Scalar rules (parsed by engine.ts parsePatternsYaml — no YAML dependency):
+#   - regexes MUST be single-quoted so backslashes stay literal ('\d' == \d).
+#   - `flags` defaults to 'g'; 'g' is force-added when missing (scanning needs matchAll).
+#   - `paths` (globs) scopes a rule; omit/empty ⇒ applies to every file.
+#   - `allow` entries are regexes tested against the full match; a hit is NOT flagged.
+
+version: 1
+patterns:
+  # --- Class 6: internal-domain emails -------------------------------------
+  # Any address at a metafactory brand domain committed to source is class-6.
+  # Sanctioned system addresses (noreply/support/security) + GitHub noreply are
+  # carved out (design doc L4: "intentional maintainer contact carved out").
+  - id: internal-email
+    class: internal-domain-email
+    tier: 2
+    action: block
+    description: internal-domain email address
+    regex: '[A-Za-z0-9._%+-]+@meta-factory\.(?:ai|dev|io)\b'
+    flags: gi
+    allow:
+      - '^(?:noreply|no-reply|support|security|security-noreply|abuse|postmaster)@'
+      - '@users\.noreply\.github\.com$'
+
+  # --- Class 5: compliance-code shape --------------------------------------
+  # STD-<ORG>-AI-### where <ORG> is 2–8 letters. The letter run is widened to 8
+  # (doc's canonical shape is {2,5}) SPECIFICALLY so BOTH sanctioned carve-outs
+  # below match the detection shape — a carve-out that the detector never fires
+  # on is false comfort (design doc L1 red-team resolution). See engine.test.ts
+  # "carve-out self-test".
+  - id: compliance-code
+    class: compliance-code-shape
+    tier: 2
+    action: block
+    description: compliance-code shape (STD-<ORG>-AI-###)
+    regex: '\bSTD-[A-Z]{2,8}-AI-\d{3}\b'
+    flags: g
+    allow:
+      - '^STD-EX-AI-\d{3}$'
+      - '^STD-EXAMPLE-AI-\d{3}$'
+
+  # --- Class 8: live platform IDs (Discord snowflakes) ---------------------
+  # 17–20 digit standalone numeric IDs. Test files ARE in scope (design doc L1:
+  # test-file globs INCLUDED). All-zero and all-same-digit placeholders allowed.
+  - id: platform-snowflake
+    class: platform-id-shape
+    tier: 2
+    action: block
+    description: 17-20 digit platform ID (non-placeholder)
+    regex: '\b\d{17,20}\b'
+    flags: g
+    allow:
+      - '^0+$'
+      - '^(\d)\1+$'
+
+  # --- Class 7: seed identities --------------------------------------------
+  # Real-looking emails in seed/migration files. Scoped to seed paths; extends
+  # to .sql/.ts/.json seed files (design doc L1). Reserved placeholder domains
+  # (RFC 2606/6761) are the only allowed forms — an internal-domain address in a
+  # seed IS flagged (the exact incident class: real principal emails in a seed).
+  - id: seed-identity
+    class: seed-identity
+    tier: 2
+    action: block
+    description: real-looking identity in a seed/migration file
+    regex: '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
+    flags: gi
+    paths:
+      - '**/migrations/**'
+      - '**/seeds/**'
+      - '**/*.sql'
+      - '**/*seed*.ts'
+      - '**/*seed*.json'
+      - '**/seed*.*'
+    allow:
+      - '@example\.(?:com|net|org)$'
+      - '\.(?:test|invalid|localhost|example)$'
