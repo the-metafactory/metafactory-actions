@@ -63,7 +63,7 @@ artifacts:
   - path: actions/A_DETECT_DRIFT
     description: Cross-reference blueprint features vs merged PRs; surface MISSING + STALE_STATUS
   - path: actions/A_COUNT_DOWNLOADS
-    description: Count package downloads per package from the production audit log (D1)
+    description: Count package downloads per package from the production or dev audit log (D1)
   # Flows
   - path: flows/F_NEXT_PICK
     description: Scan repos and blueprints, rank work, select best next task
