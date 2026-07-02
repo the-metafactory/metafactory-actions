@@ -21,6 +21,8 @@
  */
 
 import { join } from "node:path";
+import { readFileSync, unlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import {
   checkNewBinary,
   dedupe,
@@ -250,6 +252,9 @@ interface GitleaksResult {
   note: string;
 }
 
+/** Monotonic suffix so concurrent/repeat gitleaks report temp files never collide. */
+let gitleaksReportSeq = 0;
+
 /**
  * Build the gitleaks argv for a mode. ALWAYS injects `--config opts.gitleaksConfig`
  * (the bundled scan/gitleaks.toml by default) so the scanned target repo's own
@@ -257,12 +262,29 @@ interface GitleaksResult {
  * (review #9 CONFIRMED-2). The config path is absolute; gitleaks runs with
  * cwd=opts.cwd (the target), so a relative config would wrongly resolve there.
  * Exported for deterministic testing (no gitleaks binary needed).
+ *
+ * DIFF MODE (re-review F1): `gitleaks protect` scans only UNCOMMITTED changes. On
+ * the two primary diff paths — CI `pull_request` and the pre-push hook — the
+ * content is already COMMITTED, so `protect` would scan nothing and tier-1 would
+ * be silently inert (a committed secret passes the PR gate, caught only after
+ * merge). So when a committed range is given (`opts.range` set, not `--staged`)
+ * scan those commits with `gitleaks git --log-opts=<range>`. `--staged`
+ * (pre-commit, genuinely uncommitted) keeps `protect --staged`; a bare working-
+ * tree diff (no range, no staged) keeps `protect`. tree/history are unchanged.
  */
-export function buildGitleaksArgs(opts: Options, bin: string): string[] {
+export function buildGitleaksArgs(opts: Options, bin: string, reportPath = "/dev/stdout"): string[] {
   const cfg = ["--config", opts.gitleaksConfig];
-  const tail = ["--report-format", "json", "--report-path", "/dev/stdout", "--no-banner"];
+  const tail = ["--report-format", "json", "--report-path", reportPath, "--no-banner"];
   if (opts.mode === "history") return [bin, "git", ...cfg, ...tail];
   if (opts.mode === "tree") return [bin, "dir", ".", ...cfg, ...tail];
+  // diff mode:
+  if (opts.range && !opts.staged) {
+    // Committed range (CI PR / pre-push): scan the commits in the range so a
+    // committed secret is actually detected. `--log-opts` is passed verbatim to
+    // `git log`; the range has no spaces so it is a single git rev-range arg.
+    return [bin, "git", `--log-opts=${opts.range}`, ...cfg, ...tail];
+  }
+  // Staged (pre-commit) or bare working-tree diff: protect scans uncommitted content.
   return [bin, "protect", opts.staged ? "--staged" : "--no-banner", ...cfg, ...tail];
 }
 
@@ -272,14 +294,31 @@ function runGitleaks(opts: Options): GitleaksResult {
   if (which.code !== 0) {
     return { ran: false, findings: [], masks: [], note: `tier1 gitleaks: SKIPPED (binary '${bin}' not found on PATH)` };
   }
-  // Report to stdout as JSON. Non-zero exit = leaks found (expected).
-  const res = sh(buildGitleaksArgs(opts, bin), opts.cwd);
+  // Capture gitleaks' JSON report from a temp FILE, then read it back — NOT
+  // `/dev/stdout`. gitleaks opens --report-path for write with O_CREATE|O_TRUNC;
+  // on macOS that FTLs ("Report path is not writable: /dev/stdout — permission
+  // denied") and the scan yields an empty report, so tier-1 would silently run
+  // BLIND on every local hook invocation. A private temp file is portable across
+  // macOS + Linux. Non-zero gitleaks exit = leaks found (expected), not an error.
+  const reportPath = join(tmpdir(), `mf-gitleaks-${process.pid}-${gitleaksReportSeq++}.json`);
+  const res = sh(buildGitleaksArgs(opts, bin, reportPath), opts.cwd);
   const findings: Finding[] = [];
   const masks: string[] = [];
-  const jsonStart = res.stdout.indexOf("[");
+  let raw = "";
+  try {
+    raw = readFileSync(reportPath, "utf8");
+  } catch {
+    // No report file — gitleaks errored before writing one (e.g. a bad range, or a
+    // config error). Best-effort tier-1: report it ran-without-output and let the
+    // fail-closed tiers 2/3 (which parse git themselves) gate the run.
+    return { ran: true, findings, masks, note: `tier1 gitleaks: ran but produced no report (exit ${res.code}) — see stderr` };
+  } finally {
+    try { unlinkSync(reportPath); } catch { /* temp report may be absent; nothing to clean up */ }
+  }
+  const jsonStart = raw.indexOf("[");
   if (jsonStart >= 0) {
     try {
-      const arr = JSON.parse(res.stdout.slice(jsonStart)) as Array<Record<string, unknown>>;
+      const arr = JSON.parse(raw.slice(jsonStart)) as Array<Record<string, unknown>>;
       for (const g of arr) {
         findings.push({
           tier: 1,

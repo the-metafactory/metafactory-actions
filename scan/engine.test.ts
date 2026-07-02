@@ -819,3 +819,98 @@ describe("review #9 CONFIRMED-2 (gitleaks --config) + --target alias", () => {
     }
   });
 });
+
+// ===========================================================================
+// Re-review F1 — tier-1 gitleaks must scan the COMMITTED range in diff mode.
+// `gitleaks protect` only sees UNCOMMITTED changes; on the CI pull_request and
+// pre-push paths the content is already committed, so protect would scan nothing
+// and a committed secret would pass the gate silently. diff+range now uses
+// `gitleaks git --log-opts=<range>`. Secrets in fixtures are BUILT AT RUNTIME so
+// no key marker sits in this (public, self-scanned) file.
+// ===========================================================================
+
+const HAS_GITLEAKS =
+  Bun.spawnSync([process.platform === "win32" ? "where" : "which", process.env.MF_GITLEAKS_BIN || "gitleaks"]).exitCode === 0;
+
+/** A PEM private key assembled at runtime — the "PRIVATE KEY" marker never appears literally in this source. */
+function syntheticPrivateKey(): string {
+  const marker = ["PRIVATE", "KEY"].join(" ");
+  return [
+    `-----BEGIN RSA ${marker}-----`,
+    "MIIEowIBAAKCAQEAx3f8kQZ9tVmP0nQ7bL2sT4wR6yU8iO1pA3dF5gH7jK9lZ0xC",
+    "bV2nM4qW6eR8tY0uI2oP4aS6dF8gH0jK2lZ4xC6vB8nM0qW2eR4tY6uI8oP0aS2d",
+    `-----END RSA ${marker}-----`,
+  ].join("\n");
+}
+
+describe("F1 (re-review): diff mode scans the COMMITTED range via `gitleaks git --log-opts`", () => {
+  test("buildGitleaksArgs branching: committed range → `git --log-opts`; --staged → `protect --staged`; bare → `protect`", () => {
+    // Committed range (CI PR / pre-push): must scan the commits, not uncommitted changes.
+    const range = buildGitleaksArgs(opts({ mode: "diff", range: "origin/main...HEAD", staged: false, gitleaksConfig: "/c/gl.toml" }), "gl");
+    expect(range[1]).toBe("git");
+    expect(range).toContain("--log-opts=origin/main...HEAD");
+    expect(range[range.indexOf("--config") + 1]).toBe("/c/gl.toml"); // --config still pinned
+    // Staged (pre-commit, genuinely uncommitted): protect --staged.
+    const staged = buildGitleaksArgs(opts({ mode: "diff", staged: true, range: null, gitleaksConfig: "/c/gl.toml" }), "gl");
+    expect(staged[1]).toBe("protect");
+    expect(staged).toContain("--staged");
+    expect(staged).toContain("--config");
+    // Bare working-tree diff (no range, no staged): protect (no --staged, no --log-opts).
+    const bare = buildGitleaksArgs(opts({ mode: "diff", staged: false, range: null }), "gl");
+    expect(bare[1]).toBe("protect");
+    expect(bare).not.toContain("--staged");
+    expect(bare.some((a) => a.startsWith("--log-opts"))).toBe(false);
+  });
+
+  test.skipIf(!HAS_GITLEAKS)("REAL gitleaks: a secret COMMITTED in the range IS found by diff mode (BLOCK, exit 1)", async () => {
+    const dir = tmpRepo("mfa-f1-committed-");
+    try {
+      writeFileSync(join(dir, "base.ts"), "const ok = 1;\n");
+      git(["add", "-A"], dir);
+      git(["commit", "-qm", "base"], dir);
+      writeFileSync(join(dir, "id_rsa"), syntheticPrivateKey() + "\n"); // committed in the range below
+      git(["add", "-A"], dir);
+      git(["commit", "-qm", "add key"], dir);
+      const o = opts({ mode: "diff", range: "HEAD~1...HEAD", useGitleaks: true, gitleaksConfig: join(import.meta.dir, "gitleaks.toml"), cwd: dir });
+      const report = await runScan(o);
+      const tier1 = report.findings.filter((f) => f.tier === 1);
+      expect(tier1.length).toBeGreaterThanOrEqual(1);            // committed secret in range is NOW detected
+      expect(tier1.some((f) => f.action === "block")).toBe(true);
+      expect(decideExit(report.findings, o)).toBe(1);            // and it BLOCKs the gate
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(!HAS_GITLEAKS)("REAL gitleaks: a STAGED-uncommitted secret is still caught (protect --staged)", async () => {
+    const dir = tmpRepo("mfa-f1-staged-");
+    try {
+      writeFileSync(join(dir, "id_rsa"), syntheticPrivateKey() + "\n");
+      git(["add", "-A"], dir); // staged, NOT committed
+      const o = opts({ mode: "diff", staged: true, useGitleaks: true, gitleaksConfig: join(import.meta.dir, "gitleaks.toml"), cwd: dir });
+      const report = await runScan(o);
+      expect(report.findings.filter((f) => f.tier === 1).length).toBeGreaterThanOrEqual(1);
+      expect(decideExit(report.findings, o)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(!HAS_GITLEAKS)("REAL gitleaks: a clean committed range yields no tier-1 finding (exit 0)", async () => {
+    const dir = tmpRepo("mfa-f1-clean-");
+    try {
+      writeFileSync(join(dir, "base.ts"), "const ok = 1;\n");
+      git(["add", "-A"], dir);
+      git(["commit", "-qm", "base"], dir);
+      writeFileSync(join(dir, "next.ts"), "const y = 2;\n");
+      git(["add", "-A"], dir);
+      git(["commit", "-qm", "next"], dir);
+      const o = opts({ mode: "diff", range: "HEAD~1...HEAD", useGitleaks: true, gitleaksConfig: join(import.meta.dir, "gitleaks.toml"), cwd: dir });
+      const report = await runScan(o);
+      expect(report.findings.filter((f) => f.tier === 1)).toHaveLength(0);
+      expect(decideExit(report.findings, o)).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
