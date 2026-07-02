@@ -8,6 +8,7 @@ import {
   checkNewBinary,
   dedupe,
   globToRegExp,
+  hasBinaryExtension,
   hashToken,
   parsePatternsYaml,
   parseUnifiedDiff,
@@ -912,5 +913,76 @@ describe("F1 (re-review): diff mode scans the COMMITTED range via `gitleaks git 
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// ===========================================================================
+// Re-review F3 — files with embedded NUL/control bytes must be SCANNED, not
+// treated as binary and skipped. `grep`/naive scanners print "Binary file …
+// matches" and skip; a source file with sentinel bytes (e.g. \x00/\x01 in a
+// dedup-key template) would let a planted secret/term bypass tiers 2/3. Real
+// binaries are routed by EXTENSION, not by a content NUL sniff.
+// ===========================================================================
+describe("F3 (re-review): NUL/control-byte source files are scanned, not skipped as binary", () => {
+  // Line 1 carries NUL (\u0000) + SOH (\u0001) sentinel bytes; line 2 plants an
+  // internal-domain email (tier-2, no gitleaks needed). INTERNAL_EMAIL is assembled
+  // so no self-flagging literal sits in this file.
+  const nulSource = () => `const dedupKey = "a\u0000b\u0001c";\nconst leak = "${INTERNAL_EMAIL}";\n`;
+
+  test("tree mode: a NUL-bearing source file with a planted internal email BLOCKs (was silently skipped)", async () => {
+    const dir = tmpRepo("mfa-f3-tree-");
+    try {
+      writeFileSync(join(dir, "binding-resolver.ts"), nulSource());
+      git(["add", "-A"], dir);
+      const o = opts({ mode: "tree", cwd: dir });
+      const report = await runScan(o);
+      const hit = report.findings.filter((f) => f.ruleId === "internal-email");
+      expect(hit.length).toBeGreaterThanOrEqual(1); // the NUL-bearing file WAS scanned
+      expect(hit[0].line).toBe(2);                   // NUL on line 1 didn't hide line 2's content
+      expect(decideExit(report.findings, o)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("diff mode: git flags the NUL-bearing file as binary (no added lines) yet its content is still scanned", async () => {
+    const dir = tmpRepo("mfa-f3-diff-");
+    try {
+      writeFileSync(join(dir, "base.ts"), "const ok = 1;\n");
+      git(["add", "-A"], dir);
+      git(["commit", "-qm", "base"], dir);
+      writeFileSync(join(dir, "binding-resolver.ts"), nulSource());
+      git(["add", "-A"], dir);
+      git(["commit", "-qm", "add"], dir);
+      const o = opts({ mode: "diff", range: "HEAD~1...HEAD", cwd: dir });
+      const report = await runScan(o);
+      expect(report.findings.some((f) => f.ruleId === "internal-email")).toBe(true);
+      expect(decideExit(report.findings, o)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a REAL binary (by extension) under a sensitive path is flagged, NOT text-scanned as garbage", async () => {
+    const dir = tmpRepo("mfa-f3-bin-");
+    try {
+      mkdirSync(join(dir, "agents.d"), { recursive: true });
+      // PNG magic + NUL bytes — a genuine binary; must route to the new-binary rule.
+      writeFileSync(join(dir, "agents.d", "x.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x01, 0x02, 0x03]));
+      git(["add", "-A"], dir);
+      const report = await runScan(opts({ mode: "tree", cwd: dir }));
+      expect(report.findings.filter((f) => f.ruleId === "new-binary-sensitive-path")).toHaveLength(1);
+      // no spurious tier-2/3 findings from decoding raw binary bytes as text:
+      expect(report.findings.filter((f) => f.ruleId !== "new-binary-sensitive-path")).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("hasBinaryExtension routes by extension only — NUL content does not make a source file 'binary'", () => {
+    expect(hasBinaryExtension("agents.d/x.png")).toBe(true);
+    expect(hasBinaryExtension("data/blob.sqlite")).toBe(true);
+    expect(hasBinaryExtension("src/binding-resolver.ts")).toBe(false);
+    expect(hasBinaryExtension("migrations/0002_seed.sql")).toBe(false);
   });
 });

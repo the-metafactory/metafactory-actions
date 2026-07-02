@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import {
   checkNewBinary,
   dedupe,
+  hasBinaryExtension,
   parsePatternsYaml,
   parseUnifiedDiff,
   redactPath,
@@ -199,15 +200,20 @@ export async function loadDenylist(opts: Options): Promise<{ denylist: HashedDen
 // Content helpers
 // ---------------------------------------------------------------------------
 
-/** Read a file as text; returns null when absent, oversized, or binary (null-byte sniff). */
+/**
+ * Read a file as text; returns null only when absent or oversized. A file with
+ * embedded NUL/control bytes is NOT skipped as "binary" (re-review F3): source
+ * files legitimately carry sentinel bytes (e.g. `\x00`/`\x01` in a dedup-key
+ * template), and `grep`/naive scanners treat them as binary and SKIP them — so a
+ * planted secret/term inside such a file would bypass tiers 2/3 entirely. Genuine
+ * binaries are gated out by EXTENSION (`hasBinaryExtension`) in the callers before
+ * this is reached; here we decode leniently (invalid UTF-8 → U+FFFD) and scan.
+ */
 async function readTextFile(path: string): Promise<string | null> {
   const f = Bun.file(path);
   if (!(await f.exists())) return null;
   if (f.size > MAX_FILE_BYTES) return null;
-  const buf = new Uint8Array(await f.arrayBuffer());
-  const n = Math.min(buf.length, 8000);
-  for (let i = 0; i < n; i++) if (buf[i] === 0) return null; // binary
-  return new TextDecoder().decode(buf);
+  return new TextDecoder().decode(new Uint8Array(await f.arrayBuffer()));
 }
 
 /** True when the on-disk file exceeds the content-scan size cap. */
@@ -385,8 +391,13 @@ async function scanDiff(opts: Options, patterns: ShapePattern[], denylist: Hashe
   }
 
   // (b) full content of changed sensitive-path files
+  const scannedFull = new Set<string>(); // files whose full content was scanned here
   for (const file of parsed.changedFiles) {
     if (!pathMatchesAny(file, SENSITIVE_CONTENT_PATHS)) continue;
+    // Real binaries (by extension) are handled by the new-binary rule in (c); don't
+    // decode them as text. NUL-bearing SOURCE files are NOT binary — they fall
+    // through and are scanned below (F3).
+    if (hasBinaryExtension(file)) continue;
     // The staged read uses `git show` (no size cap — always fully scanned). The
     // working-tree read is size-capped: never skip a too-large sensitive file
     // silently (review #9 fix 5) — surface it as a BLOCK finding.
@@ -400,12 +411,33 @@ async function scanDiff(opts: Options, patterns: ShapePattern[], denylist: Hashe
     const chunk = scanText(content, file, patterns, denylist, opts.pepper);
     findings.push(...chunk.findings);
     masks.push(...chunk.masks);
+    scannedFull.add(file);
   }
 
-  // (c) new binaries under sensitive paths
+  // (c) files git reported as "binary". Two cases:
+  //   - a real binary (by EXTENSION) under a sensitive path → new-binary BLOCK.
+  //   - a text file git only THINKS is binary (embedded NUL/control bytes, e.g.
+  //     sentinel bytes in a source file): git omits its added lines from the diff,
+  //     so a planted secret/term would slip tiers 2/3. Scan its full changed
+  //     content as text instead (F3). Overlap with (b) is skipped via scannedFull;
+  //     dedupe collapses any residual duplicate findings.
   for (const bf of parsed.binaryFiles) {
-    const f = checkNewBinary(bf, "block");
-    if (f) findings.push(f);
+    if (hasBinaryExtension(bf)) {
+      const f = checkNewBinary(bf, "block");
+      if (f) findings.push(f);
+      continue;
+    }
+    if (scannedFull.has(bf)) continue;
+    if (!opts.staged && (await isOversizeText(join(opts.cwd, bf)))) {
+      findings.push(oversizeFinding(bf, SENSITIVE_CONTENT_PATHS));
+      oversize++;
+      continue;
+    }
+    const content = opts.staged ? sh(["git", "show", `:${bf}`], opts.cwd).stdout : await readTextFile(join(opts.cwd, bf));
+    if (!content) continue;
+    const chunk = scanText(content, bf, patterns, denylist, opts.pepper);
+    findings.push(...chunk.findings);
+    masks.push(...chunk.masks);
   }
 
   // (d) extra text: PR title/body/branch + PR-range commit messages
@@ -446,13 +478,17 @@ async function scanTree(opts: Options, patterns: ShapePattern[], denylist: Hashe
       oversize++;
       continue;
     }
-    const content = await readTextFile(join(opts.cwd, file));
-    if (content === null) {
-      // Unreadable/binary — flag binaries under sensitive paths (can't tell "new" in tree mode ⇒ warn).
-      const f = checkNewBinary(file, "warn");
+    // Real binaries are routed by EXTENSION, NOT by a NUL-byte content sniff
+    // (re-review F3): flag binaries under sensitive paths, don't text-scan them.
+    if (hasBinaryExtension(file)) {
+      const f = checkNewBinary(file, "warn"); // can't tell "new" in tree mode ⇒ warn
       if (f) findings.push(f);
       continue;
     }
+    // Everything else — INCLUDING source files with embedded NUL/control bytes —
+    // is scanned as text so a planted secret/term cannot hide behind a NUL (F3).
+    const content = await readTextFile(join(opts.cwd, file));
+    if (content === null) continue; // vanished between ls-files and read
     const chunk = scanText(content, file, patterns, denylist, opts.pepper);
     findings.push(...chunk.findings);
     masks.push(...chunk.masks);
@@ -490,7 +526,13 @@ async function scanHistory(opts: Options, patterns: ShapePattern[], denylist: Ha
     count++;
     const cat = sh(["git", "cat-file", "-p", sha], opts.cwd);
     if (cat.code !== 0) continue;
-    if (cat.stdout.includes("\0")) continue; // binary blob
+    // Real binaries are routed by EXTENSION, not by a NUL-byte sniff (F3) — a blob
+    // whose path is a source file with embedded NUL/control bytes MUST be scanned.
+    if (hasBinaryExtension(path)) {
+      const f = checkNewBinary(path, "warn");
+      if (f) findings.push(f);
+      continue;
+    }
     if (cat.stdout.length > MAX_FILE_BYTES) {
       // Too large to content-scan — surface, don't skip silently (review #9 fix 5).
       findings.push(oversizeFinding(path, SENSITIVE_CONTENT_PATHS));

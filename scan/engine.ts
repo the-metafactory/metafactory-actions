@@ -543,6 +543,17 @@ const BINARY_EXT = new RegExp(
   "i"
 );
 
+/**
+ * True when `file` has a recognized BINARY extension. This is the ONLY signal used
+ * to treat a file as binary — a NUL/control byte in the content is NOT (re-review
+ * F3: source files carry sentinel bytes and must still be text-scanned). Callers
+ * use this to route real binaries (images/archives/db) to the new-binary rule and
+ * everything else — including NUL-bearing source — to the text scanners.
+ */
+export function hasBinaryExtension(file: string): boolean {
+  return BINARY_EXT.test(file);
+}
+
 /** A file-level finding for a binary/db file added under a sensitive path. */
 export function checkNewBinary(
   file: string,
