@@ -63,10 +63,10 @@ export default {
     const shell = ctx.capabilities.shell;
     if (!shell) throw new Error("Shell capability required");
 
-    const database = D1_DATABASES[environment];
-    if (!database) {
+    if (!Object.hasOwn(D1_DATABASES, environment)) {
       throw new Error(`Unknown environment "${environment}" — expected one of: ${Object.keys(D1_DATABASES).join(", ")}`);
     }
+    const database = D1_DATABASES[environment];
 
     // wrangler must run from the meta-factory checkout (wrangler.toml + CF auth)
     const devRoot = process.env.PULSE_DEV_ROOT || join(homedir(), "Developer");

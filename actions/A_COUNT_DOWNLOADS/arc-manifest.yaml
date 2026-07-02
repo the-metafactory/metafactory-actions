@@ -16,6 +16,8 @@ capabilities:
   network:
     - domain: "api.cloudflare.com"
       reason: "wrangler d1 execute --remote queries the production/dev D1 database"
+    - domain: "registry.npmjs.org"
+      reason: "bunx resolves the wrangler package from npm if not already cached"
   bash:
     allowed: true
   secrets:
