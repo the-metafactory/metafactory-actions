@@ -89,7 +89,14 @@ export default {
     if (result.code !== 0) {
       throw new Error(`wrangler d1 execute failed (exit ${result.code}): ${result.stderr.trim().slice(0, 500)}`);
     }
-    const parsed = JSON.parse(result.stdout.trim()) as Array<{ results?: PackageDownloads[] }>;
+    let parsed: Array<{ results?: PackageDownloads[] }>;
+    try {
+      parsed = JSON.parse(result.stdout.trim());
+    } catch (err) {
+      throw new Error(
+        `wrangler d1 execute returned non-JSON output (${(err as Error).message}): ${result.stdout.trim().slice(0, 300)}`
+      );
+    }
     if (!parsed[0] || parsed[0].results === undefined) {
       throw new Error(
         `wrangler d1 execute returned no results field — expected [{ results: [...] }], got: ${result.stdout.trim().slice(0, 300)}`
