@@ -51,6 +51,13 @@ Actions are independent, composable units. Each has an `action.json` manifest an
 
 Flows orchestrate actions into pipelines. Each flow has a `flow.yaml` (source/destination) and `pipeline.yaml` (action sequence).
 
+Once installed (`arc install metafactory-actions`), run flows directly by name — no need to point pulse at a pipeline.yaml path:
+
+```bash
+pulse flow list          # discover installed flows
+pulse flow run F_PR_STATS
+```
+
 ### F_NEXT_PICK
 
 Scan all metafactory repos and blueprints for open work, rank by importance, select the single best thing to work on next.
@@ -97,6 +104,33 @@ Fetch an RSS feed, extract article content, rate for relevance, generate recomme
 
 ```
 A_FETCH_FEED → A_EXTRACT_ARTICLE → A_RATE → A_RECOMMEND
+```
+
+### F_PR_STATS
+
+Merged PR stats across the metafactory ecosystem — dual Chart.js visualization (cumulative line + daily stacked bar + combined total).
+
+```
+A_DISCOVER_REPOS → A_GATHER_PR_STATS → A_RENDER_PR_CHART
+```
+
+```bash
+pulse flow run F_PR_STATS
+open /tmp/mf-pr-stats.html
+```
+
+Defaults (override via flow input): `org: the-metafactory`, `sinceDate: 2026-03-26`, `excludeRepos: ["content-filter"]`, `outputPath: /tmp/mf-pr-stats.html`.
+
+### F_BLUEPRINT_DRIFT
+
+Walk every `blueprint.yaml` in the ecosystem, scan merged PRs for feature IDs, surface `MISSING` and `STALE_STATUS` drift between blueprint state and what actually shipped.
+
+```
+A_FETCH_BLUEPRINTS → A_SCAN_PR_FEATURE_IDS → A_DETECT_DRIFT
+```
+
+```bash
+pulse flow run F_BLUEPRINT_DRIFT
 ```
 
 ## Structure
