@@ -49,13 +49,59 @@ bun scan/confidentiality-scan.ts tree
 # every reachable blob (weekly history scan)
 bun scan/confidentiality-scan.ts history
 
+# an arbitrary STRING — stdin or --file (surface gates: a Discord message,
+# composed release notes, a deploy file's content). Tiers 2+3 ONLY — see below.
+echo "some message" | bun scan/confidentiality-scan.ts text
+bun scan/confidentiality-scan.ts text --file path/to/release-notes.md
+
 # JSON output (masked findings only)
 bun scan/confidentiality-scan.ts diff --staged --json
 ```
 
 Flags: `--staged`, `--range <A..B>`, `--denylist <path>`, `--patterns <path>`,
-`--extra-text <str>` (repeatable — PR title/body/branch), `--no-gitleaks`,
+`--extra-text <str>` (repeatable — PR title/body/branch), `--file <path>`
+(`text` mode only — read content from a file instead of stdin), `--no-gitleaks`,
 `--fail-on-warn`, `--require-denylist`, `--json`, `--cwd <path>`.
+
+### `text` mode — scanning a string, not a git range
+
+`text` mode is the shared prerequisite for surface gates that don't have a git
+range to scan — a Discord message about to be posted, composed release notes, a
+deploy file set (compass#91/#92/#93). It reuses the exact same detection core as
+every other mode (no new patterns, no new denylist logic) with one difference:
+**tier 1 (`gitleaks`) never runs** — gitleaks is inherently git-only (it scans a
+repo/range), so `text` mode runs **tiers 2 (shapes) + 3 (denylist) only**. This
+is unconditional (not the same knob as `--no-gitleaks`, which still applies to
+`diff`/`tree`/`history`).
+
+Content source, in precedence order: `--file <path>` > stdin. Findings, masking,
+`::add-mask::` emission, and the exit-code contract (`0`/`1`/`3`) are byte-identical
+to the git modes.
+
+```bash
+# a Discord message about to be posted
+echo "$MESSAGE" | bun scan/confidentiality-scan.ts text
+
+# a specific file's content (deploy file set, composed release notes)
+bun scan/confidentiality-scan.ts text --file release-notes.md
+```
+
+**Programmatic entry point.** A caller already living in this package (or a
+future in-repo surface gate) can import `scanSurfaceText()` from
+`scan/confidentiality-scan.ts` instead of shelling out — it returns the same
+`ScanReport` shape as `runScan()`:
+
+```ts
+import { scanSurfaceText } from "./scan/confidentiality-scan.ts";
+
+const report = await scanSurfaceText(message, { label: "discord-message" });
+if (report.findings.some((f) => f.action === "block")) { /* block the post */ }
+```
+
+The **primary consumer path for cross-repo surface gates is still shelling to the
+installed CLI's `text` mode** (mirroring how the git modes are consumed) — no
+cross-repo import of this package. `scanSurfaceText()` is the same-process
+convenience wrapper around `runScan({ mode: "text", ... })`.
 
 `--require-denylist` (or env `MF_REQUIRE_DENYLIST=1`) enforces tier 3: an
 absent/empty denylist **fails closed** (exit 3) instead of degrading silently.

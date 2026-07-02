@@ -6,9 +6,14 @@
  *   diff     changed lines of a PR / staged commit (default consumer: git hooks + CI PRs)
  *   tree     the whole working tree (default consumer: push events, ad-hoc audits)
  *   history  every reachable blob (default consumer: scheduled weekly history scan)
+ *   text     an arbitrary STRING — stdin or --file (default consumer: surface gates —
+ *            a Discord message, composed release notes, a deploy file set. Phase-3
+ *            prerequisite for compass#91/#92/#93.) Tiers 2+3 ONLY; see below.
  *
- * Tiers (each mode runs all available tiers):
- *   1  gitleaks  — pinned binary shelled out when present; best-effort, masked
+ * Tiers (each mode runs all available tiers EXCEPT text mode — see below):
+ *   1  gitleaks  — pinned binary shelled out when present; best-effort, masked.
+ *      GIT-ONLY: gitleaks needs a git repo/range to operate on, so it is never
+ *      invoked in text mode (there is no git object to scan) — tiers 2+3 only.
  *   2  shapes    — public-patterns.yaml (this repo, public-safe)
  *   3  denylist  — salted-SHA-256 hashed denylist supplied at RUNTIME (never committed)
  *
@@ -62,7 +67,7 @@ const SENSITIVE_CONTENT_PATHS = [
 // Options
 // ---------------------------------------------------------------------------
 
-export type Mode = "diff" | "tree" | "history";
+export type Mode = "diff" | "tree" | "history" | "text";
 
 export interface Options {
   mode: Mode;
@@ -72,6 +77,14 @@ export interface Options {
   patternsPath: string;
   extraText: string[];
   useGitleaks: boolean;
+  /** text mode only: read content from this path instead of stdin. Also used (when set) as the label/path fed to path-scoped tier-2 rules. */
+  filePath: string | null;
+  /**
+   * text mode only: content supplied directly by a programmatic caller
+   * (`scanSurfaceText`), bypassing stdin/--file entirely. Takes precedence over
+   * `filePath` when non-null.
+   */
+  textContent: string | null;
   /**
    * Pinned gitleaks config passed as `--config`. Defaults to the bundled
    * scan/gitleaks.toml, which makes gitleaks IGNORE any `.gitleaks.toml`
@@ -103,6 +116,8 @@ export function parseArgs(argv: string[]): Options {
     patternsPath: join(HERE, "public-patterns.yaml"),
     extraText: [],
     useGitleaks: true,
+    filePath: null,
+    textContent: null,
     gitleaksConfig: join(HERE, "gitleaks.toml"),
     failOnWarn: false,
     json: false,
@@ -111,7 +126,7 @@ export function parseArgs(argv: string[]): Options {
     requireDenylist: process.env.MF_REQUIRE_DENYLIST === "1",
   };
   const positional = argv.filter((a) => !a.startsWith("-"));
-  if (positional[0] && ["diff", "tree", "history"].includes(positional[0])) {
+  if (positional[0] && ["diff", "tree", "history", "text"].includes(positional[0])) {
     opts.mode = positional[0] as Mode;
   }
   for (let i = 0; i < argv.length; i++) {
@@ -127,6 +142,7 @@ export function parseArgs(argv: string[]): Options {
     else if (a === "--json") opts.json = true;
     else if (a === "--cwd" || a === "--target") opts.cwd = argv[++i] ?? opts.cwd;
     else if (a === "--gitleaks-config") opts.gitleaksConfig = argv[++i] ?? opts.gitleaksConfig;
+    else if (a === "--file") opts.filePath = argv[++i] ?? null;
   }
   return opts;
 }
@@ -548,6 +564,38 @@ async function scanHistory(opts: Options, patterns: ShapePattern[], denylist: Ha
   return { findings, masks, notices };
 }
 
+/**
+ * text mode (tiers 2+3 only — see the module header). Content source, in order:
+ *   1. `opts.textContent` — set only by the programmatic `scanSurfaceText()` entry
+ *      point; bypasses stdin/--file entirely.
+ *   2. `opts.filePath` (`--file <path>`) — read the file as text.
+ *   3. stdin — read to EOF.
+ *
+ * The label fed to the tier-2 scanners is `opts.filePath` when given (so
+ * path-scoped rules, e.g. seed-identity's `**\/migrations/**`, still apply when a
+ * surface gate is scanning a real file's content), else a synthetic
+ * `<text:stdin>` / `<text:input>` marker for path-unscoped content (a Discord
+ * message, composed release notes). No git plumbing is touched.
+ */
+async function scanTextInput(opts: Options, patterns: ShapePattern[], denylist: HashedDenylist): Promise<{ findings: Finding[]; masks: string[]; notices: string[] }> {
+  let content: string;
+  let label: string;
+  if (opts.textContent !== null) {
+    content = opts.textContent;
+    label = opts.filePath || "<text:input>";
+  } else if (opts.filePath) {
+    const f = Bun.file(opts.filePath);
+    if (!(await f.exists())) throw new Error(`--file path not found: ${opts.filePath}`);
+    content = await f.text();
+    label = opts.filePath;
+  } else {
+    content = await Bun.stdin.text();
+    label = "<text:stdin>";
+  }
+  const chunk = scanText(content, label, patterns, denylist, opts.pepper);
+  return { findings: chunk.findings, masks: chunk.masks, notices: [] };
+}
+
 // ---------------------------------------------------------------------------
 // Orchestration
 // ---------------------------------------------------------------------------
@@ -577,8 +625,13 @@ export async function runScan(opts: Options): Promise<ScanReport> {
   const allFindings: Finding[] = [];
   const allMasks: string[] = [];
 
-  // Tier 1
-  if (opts.useGitleaks) {
+  // Tier 1 — git-only (gitleaks needs a repo/range); never invoked in text mode,
+  // regardless of --no-gitleaks (module header + design doc: text mode is tiers
+  // 2+3 ONLY). This is NOT the same knob as --no-gitleaks — that toggle stays
+  // meaningful for diff/tree/history.
+  if (opts.mode === "text") {
+    notices.push("tier1 gitleaks: N/A (text mode is git-independent — tiers 2+3 only)");
+  } else if (opts.useGitleaks) {
     const gl = runGitleaks(opts);
     notices.push(gl.note);
     if (gl.ran) tiersRun.unshift(1);
@@ -594,7 +647,9 @@ export async function runScan(opts: Options): Promise<ScanReport> {
       ? await scanTree(opts, patterns, denylist)
       : opts.mode === "history"
         ? await scanHistory(opts, patterns, denylist)
-        : await scanDiff(opts, patterns, denylist);
+        : opts.mode === "text"
+          ? await scanTextInput(opts, patterns, denylist)
+          : await scanDiff(opts, patterns, denylist);
   allFindings.push(...modeResult.findings);
   allMasks.push(...modeResult.masks);
   notices.push(...modeResult.notices);
@@ -607,6 +662,55 @@ export async function runScan(opts: Options): Promise<ScanReport> {
     denylistSource: source,
     tiersRun: [...new Set(tiersRun)].sort(),
   };
+}
+
+/**
+ * Thin programmatic entry point for surface gates (compass#91/#92/#93): scan a
+ * STRING (a Discord message, composed release notes, a deploy file's content)
+ * instead of a git range. Runs `runScan` in `text` mode under the hood — same
+ * tiers (2+3 only, see module header), same masked `Finding` shape, same
+ * `ScanReport` shape callers already get from `runScan`.
+ *
+ * The PRIMARY consumer path is shelling to the CLI's `text` mode (`bun
+ * scan/confidentiality-scan.ts text --file <path>` / piping via stdin) — surface
+ * gates shell to the installed engine like the git modes do, no cross-repo
+ * import. This export exists for the same-process / same-repo case (unit tests,
+ * or a consumer that already lives inside this package).
+ *
+ * Denylist/patterns resolution matches every other mode: `denylistPath` >
+ * `MF_CONFIDENTIALITY_DENYLIST` env > bundled placeholder; `patternsPath`
+ * defaults to the bundled `public-patterns.yaml`. Pass `label` to give the
+ * content a path so path-scoped tier-2 rules (e.g. seed-identity) apply; omit it
+ * for path-unscoped content (a Discord message body has no meaningful path).
+ */
+export async function scanSurfaceText(
+  content: string,
+  opts: {
+    denylistPath?: string | null;
+    patternsPath?: string;
+    label?: string | null;
+    pepper?: string;
+    requireDenylist?: boolean;
+    failOnWarn?: boolean;
+  } = {}
+): Promise<ScanReport> {
+  return runScan({
+    mode: "text",
+    staged: false,
+    range: null,
+    denylistPath: opts.denylistPath ?? null,
+    patternsPath: opts.patternsPath ?? join(HERE, "public-patterns.yaml"),
+    extraText: [],
+    useGitleaks: false,
+    filePath: opts.label ?? null,
+    textContent: content,
+    gitleaksConfig: join(HERE, "gitleaks.toml"),
+    failOnWarn: opts.failOnWarn ?? false,
+    json: false,
+    cwd: process.cwd(),
+    pepper: opts.pepper ?? (process.env.CONF_DENYLIST_PEPPER || ""),
+    requireDenylist: opts.requireDenylist ?? process.env.MF_REQUIRE_DENYLIST === "1",
+  });
 }
 
 // ---------------------------------------------------------------------------

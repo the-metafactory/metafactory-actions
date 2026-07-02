@@ -31,6 +31,7 @@ import {
   parseArgs,
   renderReport,
   runScan,
+  scanSurfaceText,
   type Options,
 } from "./confidentiality-scan.ts";
 import { findShadowingRepos, localHooksPathOverride, run as runInstaller } from "./install-hooks.ts";
@@ -74,6 +75,8 @@ function opts(overrides: Partial<Options> = {}): Options {
     patternsPath: PATTERNS_PATH,
     extraText: [],
     useGitleaks: false,
+    filePath: null,
+    textContent: null,
     gitleaksConfig: "scan/gitleaks.toml",
     failOnWarn: false,
     json: false,
@@ -984,5 +987,160 @@ describe("F3 (re-review): NUL/control-byte source files are scanned, not skipped
     expect(hasBinaryExtension("data/blob.sqlite")).toBe(true);
     expect(hasBinaryExtension("src/binding-resolver.ts")).toBe(false);
     expect(hasBinaryExtension("migrations/0002_seed.sql")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// text mode — scan a STRING (stdin / --file / textContent), tiers 2+3 ONLY.
+// Phase-3 shared prerequisite (compass#91 Discord public-post / #92 release-notes
+// scan / #93 deploy-surface): surface gates don't have a git range to scan, they
+// have a message/document/file-set. This mode reuses the SAME detection core —
+// no new tiers, no new patterns, no new denylist logic.
+// ===========================================================================
+
+describe("text mode: runScan(mode:'text') over a synthetic tier-2 shape", () => {
+  test("a runtime-built internal-email shape in free text BLOCKs, exit 1, output masked", async () => {
+    const o = opts({ mode: "text", textContent: `leak: ${INTERNAL_EMAIL}` });
+    const report = await runScan(o);
+    const blocks = report.findings.filter((f) => f.action === "block");
+    expect(blocks.some((f) => f.ruleId === "internal-email")).toBe(true);
+    expect(decideExit(report.findings, o)).toBe(1);
+    const rendered = renderReport(report, undefined, o);
+    expect(rendered).not.toContain(INTERNAL_EMAIL);
+    expect(rendered).toContain("BLOCK");
+  });
+
+  test("clean prose → no findings, exit 0", async () => {
+    const o = opts({ mode: "text", textContent: "just a normal status update, nothing sensitive here" });
+    const report = await runScan(o);
+    expect(report.findings).toHaveLength(0);
+    expect(decideExit(report.findings, o)).toBe(0);
+  });
+
+  test("--file <path>: content read from disk gets the SAME detection + exit contract", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mfa-text-file-"));
+    try {
+      const file = join(dir, "release-notes.txt");
+      writeFileSync(file, `Deploying build tagged with code ${COMPLIANCE}\n`);
+      const o = parseArgs(["text", "--file", file, "--patterns", PATTERNS_PATH]);
+      const report = await runScan(o);
+      const blocks = report.findings.filter((f) => f.action === "block");
+      expect(blocks.some((f) => f.ruleId === "compliance-code")).toBe(true);
+      expect(decideExit(report.findings, o)).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--file pointing at a missing path fails closed (throws, not a silent clean)", async () => {
+    const o = parseArgs(["text", "--file", "/no/such/file/anywhere.txt", "--patterns", PATTERNS_PATH]);
+    expect(await rejects(() => runScan(o), /--file path not found/i)).toBe(true);
+  });
+
+  test("missing/inert denylist + --require-denylist fails closed in text mode too (exit 3 at the CLI)", async () => {
+    const o = opts({ mode: "text", textContent: "clean", requireDenylist: true });
+    expect(await rejects(() => runScan(o), /require-denylist/i)).toBe(true);
+  });
+
+  test("tier-1 gitleaks is NEVER invoked in text mode — not even with useGitleaks:true", async () => {
+    const o = opts({ mode: "text", textContent: "clean, nothing here", useGitleaks: true });
+    const report = await runScan(o);
+    expect(report.tiersRun).not.toContain(1);
+    expect(report.notices.join("\n")).toContain("tier1 gitleaks: N/A");
+  });
+
+  test("git modes are byte-unaffected: parseArgs still defaults to diff, text-only fields default null", () => {
+    const o = parseArgs([]);
+    expect(o.mode).toBe("diff");
+    expect(o.filePath).toBeNull();
+    expect(o.textContent).toBeNull();
+  });
+
+  test("parseArgs recognizes the text positional mode and --file", () => {
+    const o = parseArgs(["text", "--file", "/tmp/x.txt"]);
+    expect(o.mode).toBe("text");
+    expect(o.filePath).toBe("/tmp/x.txt");
+  });
+});
+
+describe("scanSurfaceText — programmatic entry point, mirrors runScan's ScanReport shape", () => {
+  test("clean content → empty findings, tier-1 absent", async () => {
+    const clean = await scanSurfaceText("just some prose, nothing sensitive", { patternsPath: PATTERNS_PATH });
+    expect(clean.findings).toHaveLength(0);
+    expect(clean.tiersRun).not.toContain(1);
+  });
+
+  test("a synthetic tier-2 shape is flagged, action=block", async () => {
+    const dirty = await scanSurfaceText(`code: ${COMPLIANCE}`, { patternsPath: PATTERNS_PATH });
+    expect(dirty.findings.some((f) => f.ruleId === "compliance-code" && f.action === "block")).toBe(true);
+  });
+
+  test("label gives path-scoped tier-2 rules (e.g. seed-identity) the context they need", async () => {
+    const email = "seed.user@" + ["acme", "widgets"].join("") + ".io"; // synthetic, non-reserved
+    const scoped = await scanSurfaceText(`('${email}')`, { patternsPath: PATTERNS_PATH, label: "migrations/x.sql" });
+    expect(scoped.findings.some((f) => f.ruleId === "seed-identity")).toBe(true);
+    const unscoped = await scanSurfaceText(`('${email}')`, { patternsPath: PATTERNS_PATH });
+    expect(unscoped.findings.some((f) => f.ruleId === "seed-identity")).toBe(false);
+  });
+});
+
+// ===========================================================================
+// text mode — real CLI process: stdin plumbing + --file plumbing + actual exit
+// codes. The unit tests above exercise runScan()/scanSurfaceText() directly;
+// these spawn the actual `bun scan/confidentiality-scan.ts text` entry point the
+// way a surface gate will (shell out, pipe a message on stdin, read $?).
+// ===========================================================================
+
+describe("text mode: real CLI process (stdin + --file + exit codes)", () => {
+  const CLI = join(import.meta.dir, "confidentiality-scan.ts");
+
+  function runCli(args: string[], stdin?: string): { code: number; stdout: string; stderr: string } {
+    const p = Bun.spawnSync(["bun", CLI, ...args], {
+      stdin: stdin !== undefined ? new TextEncoder().encode(stdin) : undefined,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      code: p.exitCode ?? 1,
+      stdout: p.stdout ? new TextDecoder().decode(p.stdout) : "",
+      stderr: p.stderr ? new TextDecoder().decode(p.stderr) : "",
+    };
+  }
+
+  test("stdin: a clean message exits 0", () => {
+    const r = runCli(["text"], "just a normal deploy message, nothing sensitive");
+    expect(r.code).toBe(0);
+    expect(r.stdout).toContain("no confidentiality findings");
+  });
+
+  test("stdin: a message carrying a runtime-built tier-2 shape BLOCKs, exit 1, masked stdout", () => {
+    const r = runCli(["text"], `heads up, code is ${COMPLIANCE}`);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toContain("BLOCK");
+    expect(r.stdout).not.toContain(COMPLIANCE);
+  });
+
+  test("--file: a deploy-file-set member with a planted shape BLOCKs, exit 1, masked stdout", () => {
+    const dir = mkdtempSync(join(tmpdir(), "mfa-text-cli-file-"));
+    try {
+      const file = join(dir, "notes.md");
+      writeFileSync(file, `internal contact: ${INTERNAL_EMAIL}\n`);
+      const r = runCli(["text", "--file", file]);
+      expect(r.code).toBe(1);
+      expect(r.stdout).not.toContain(INTERNAL_EMAIL);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--file missing path fails closed at the CLI: exit 3, stderr explains why", () => {
+    const r = runCli(["text", "--file", "/no/such/file/anywhere.txt"]);
+    expect(r.code).toBe(3);
+    expect(r.stderr).toContain("--file path not found");
+  });
+
+  test("--require-denylist with no denylist supplied fails closed at the CLI: exit 3", () => {
+    const r = runCli(["text", "--require-denylist"], "clean content, no shapes");
+    expect(r.code).toBe(3);
   });
 });
