@@ -22,6 +22,7 @@ import {
   type ShapePattern,
 } from "./engine.ts";
 import {
+  buildGitleaksArgs,
   decideExit,
   expandMasks,
   loadDenylist,
@@ -72,6 +73,7 @@ function opts(overrides: Partial<Options> = {}): Options {
     patternsPath: PATTERNS_PATH,
     extraText: [],
     useGitleaks: false,
+    gitleaksConfig: "scan/gitleaks.toml",
     failOnWarn: false,
     json: false,
     cwd: process.cwd(),
@@ -794,5 +796,26 @@ describe("GOLDEN VECTORS — canon + sha256(salt:canon) parity lock (#101 contra
     expect(canon(nfd).length).toBe(4);
     expect(hashToken(SALT, canon(nfd))).toBe("f1100e4b38eadc0b7eee839a6e3c83499e53e36f0c1c39ca6fb544f7779ee30d");
     expect(hashToken(SALT, canon(nfd))).toBe(hashToken(SALT, canon(nfc)));
+  });
+});
+
+describe("review #9 CONFIRMED-2 (gitleaks --config) + --target alias", () => {
+  test("--target is an alias for --cwd", () => {
+    expect(parseArgs(["tree", "--target", "/x/y"]).cwd).toBe("/x/y");
+    expect(parseArgs(["tree", "--cwd", "/a/b"]).cwd).toBe("/a/b");
+  });
+
+  test("--gitleaks-config overrides; default is the bundled pinned config", () => {
+    expect(parseArgs(["tree", "--gitleaks-config", "/z/gl.toml"]).gitleaksConfig).toBe("/z/gl.toml");
+    expect(parseArgs(["tree"]).gitleaksConfig.endsWith("gitleaks.toml")).toBe(true);
+  });
+
+  test("gitleaks is always invoked with our pinned --config, in every mode (a target's own .gitleaks.toml cannot disable tier-1)", () => {
+    for (const mode of ["diff", "tree", "history"] as const) {
+      const args = buildGitleaksArgs(opts({ mode, gitleaksConfig: "/pinned/gitleaks.toml" }), "gitleaks");
+      const ci = args.indexOf("--config");
+      expect(ci).toBeGreaterThan(-1);
+      expect(args[ci + 1]).toBe("/pinned/gitleaks.toml");
+    }
   });
 });

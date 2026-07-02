@@ -69,6 +69,14 @@ export interface Options {
   patternsPath: string;
   extraText: string[];
   useGitleaks: boolean;
+  /**
+   * Pinned gitleaks config passed as `--config`. Defaults to the bundled
+   * scan/gitleaks.toml, which makes gitleaks IGNORE any `.gitleaks.toml`
+   * committed in the scanned target — so an attacker can't disable tier-1 by
+   * committing a catch-all `[allowlist]` (review #9 CONFIRMED-2). Override with
+   * --gitleaks-config.
+   */
+  gitleaksConfig: string;
   failOnWarn: boolean;
   json: boolean;
   cwd: string;
@@ -92,6 +100,7 @@ export function parseArgs(argv: string[]): Options {
     patternsPath: join(HERE, "public-patterns.yaml"),
     extraText: [],
     useGitleaks: true,
+    gitleaksConfig: join(HERE, "gitleaks.toml"),
     failOnWarn: false,
     json: false,
     cwd: process.cwd(),
@@ -113,7 +122,8 @@ export function parseArgs(argv: string[]): Options {
     else if (a === "--fail-on-warn") opts.failOnWarn = true;
     else if (a === "--require-denylist") opts.requireDenylist = true;
     else if (a === "--json") opts.json = true;
-    else if (a === "--cwd") opts.cwd = argv[++i] ?? opts.cwd;
+    else if (a === "--cwd" || a === "--target") opts.cwd = argv[++i] ?? opts.cwd;
+    else if (a === "--gitleaks-config") opts.gitleaksConfig = argv[++i] ?? opts.gitleaksConfig;
   }
   return opts;
 }
@@ -240,20 +250,30 @@ interface GitleaksResult {
   note: string;
 }
 
+/**
+ * Build the gitleaks argv for a mode. ALWAYS injects `--config opts.gitleaksConfig`
+ * (the bundled scan/gitleaks.toml by default) so the scanned target repo's own
+ * `.gitleaks.toml` — e.g. a catch-all `[allowlist]` — cannot disable tier-1
+ * (review #9 CONFIRMED-2). The config path is absolute; gitleaks runs with
+ * cwd=opts.cwd (the target), so a relative config would wrongly resolve there.
+ * Exported for deterministic testing (no gitleaks binary needed).
+ */
+export function buildGitleaksArgs(opts: Options, bin: string): string[] {
+  const cfg = ["--config", opts.gitleaksConfig];
+  const tail = ["--report-format", "json", "--report-path", "/dev/stdout", "--no-banner"];
+  if (opts.mode === "history") return [bin, "git", ...cfg, ...tail];
+  if (opts.mode === "tree") return [bin, "dir", ".", ...cfg, ...tail];
+  return [bin, "protect", opts.staged ? "--staged" : "--no-banner", ...cfg, ...tail];
+}
+
 function runGitleaks(opts: Options): GitleaksResult {
   const bin = process.env.MF_GITLEAKS_BIN || "gitleaks";
   const which = sh([process.platform === "win32" ? "where" : "which", bin], opts.cwd);
   if (which.code !== 0) {
     return { ran: false, findings: [], masks: [], note: `tier1 gitleaks: SKIPPED (binary '${bin}' not found on PATH)` };
   }
-  // Choose subcommand by mode. Report to stdout as JSON. Non-zero exit = leaks found (expected).
-  const sub =
-    opts.mode === "history"
-      ? [bin, "git", "--report-format", "json", "--report-path", "/dev/stdout", "--no-banner"]
-      : opts.mode === "tree"
-        ? [bin, "dir", ".", "--report-format", "json", "--report-path", "/dev/stdout", "--no-banner"]
-        : [bin, "protect", opts.staged ? "--staged" : "--no-banner", "--report-format", "json", "--report-path", "/dev/stdout", "--no-banner"];
-  const res = sh(sub, opts.cwd);
+  // Report to stdout as JSON. Non-zero exit = leaks found (expected).
+  const res = sh(buildGitleaksArgs(opts, bin), opts.cwd);
   const findings: Finding[] = [];
   const masks: string[] = [];
   const jsonStart = res.stdout.indexOf("[");
