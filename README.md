@@ -122,3 +122,75 @@ This repo replaces actions previously scattered across:
 - `pulse/examples/` (next-pick, ecosystem-digest, arc-upgrade, sync-repos, rss-pipeline)
 - `ecosystem-digest` (standalone repo)
 - `handover-digest` (standalone repo)
+
+## Confidentiality gate — caller usage
+
+Two **reusable workflows** (design doc §4 L1/L5, umbrella compass#81) that every
+public repo calls to keep client-confidential content out of the tree, the
+history, and the merge-bypass path. They drive the shared scan engine in
+[`scan/`](scan/README.md).
+
+- `.github/workflows/confidentiality-gate.yml` — required status check. Runs the
+  engine in `diff` mode on PRs, `tree` on push, `history` on schedule.
+- `.github/workflows/confidentiality-push-alert.yml` — detects merge-bypass on the
+  default branch (forced push, direct push, **zero-approval merge = `--admin`**),
+  alerts the private ops channel (with SHA) + opens a **SHA-free** public issue.
+
+Drop this into each public repo. **Pin both by 40-hex commit SHA** — a branch/tag
+ref is movable (check-name-spoof + it would select the engine too), and the gate
+now **fails closed** if it cannot resolve an immutable engine SHA. **Pass only the
+named secrets** — never `secrets: inherit` (that hands every caller secret to the
+reusable workflow; scope the blast radius to just what the gate needs):
+
+```yaml
+# .github/workflows/confidentiality.yml
+name: confidentiality
+on:
+  pull_request:            # NOT pull_request_target — the gate refuses it (fail-open/secret-exposure footgun)
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"   # weekly history scan
+jobs:
+  gate:
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@<PIN-40-HEX-SHA>
+    secrets:
+      MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+      CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}   # optional; omit if unused
+  alert:
+    if: ${{ github.event_name == 'push' }}
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-push-alert.yml@<PIN-40-HEX-SHA>
+    secrets:
+      MF_OPS_DISCORD_WEBHOOK: ${{ secrets.MF_OPS_DISCORD_WEBHOOK }}
+```
+
+Then add the observed `confidentiality-gate` check to the repo's **required
+status checks** (the exact context name is read from the first run — see the
+compass rollout tooling).
+
+### Degraded-fork contract (never fails open silently)
+
+- **Same-repo run without the denylist secret → HARD FAIL** naming the org-secret
+  visibility list. The denylist tier is never silently skipped on a trusted run.
+- **Fork PR → DEGRADED mode**: the org secret is unavailable to forks by design,
+  so the gate runs **tiers 1+2 only** and emits a visible `::notice::`. A maintainer
+  **must** run the full-denylist local gate before merging a fork PR (SOP OD-2).
+- **gitleaks (tier 1)** is pinned by version **and sha256-verified on every run,
+  including cache restores** — the tarball is re-verified before use and the binary
+  re-extracted from it, so a poisoned cache cannot slip an unverified binary past the
+  pin. A download flake or sha256 **mismatch** skips tier 1 (tiers 2+3 still gate)
+  rather than running an unverified/tampered binary. gitleaks runs against a
+  **pinned trusted config** (`--gitleaks-config`), so an in-tree `.gitleaks.toml`
+  in the caller repo cannot disable tier 1.
+- The scan runs `bun` from a **trusted working directory** (`runner.temp`), never
+  the caller checkout, and scans the tree via `--target` — so a `bunfig.toml`
+  (`preload`) planted in a PR cannot execute code in the secret-bearing gate job.
+- Findings are **masked** by the engine (no matched literal, no digest);
+  `::add-mask::` registers raw matches with the runner before any finding line.
+- **Diff mode is fail-closed**: the gate fetches and verifies the PR base ref and
+  asserts the scan range covers the PR's changed files — a git/fetch error or an
+  empty range never reads as "clean."
+- The engine is checked out at the **immutable commit SHA** GitHub resolved for the
+  reusable-workflow file (`github.job_workflow_sha`), so the engine is byte-matched
+  to the gate. A movable tag or floating `main` can no longer select the engine; the
+  gate fails closed if it cannot resolve a 40-hex commit.

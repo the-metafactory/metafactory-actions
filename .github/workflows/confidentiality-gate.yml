@@ -1,0 +1,286 @@
+# Reusable confidentiality gate (design doc §4 L1). Called by every public repo
+# as a required status check. Runs the shared scan engine in the right mode for
+# the caller's event, with a pinned+cached+sha256-verified gitleaks (tier 1),
+# public shape patterns (tier 2), and the org-secret hashed denylist (tier 3).
+#
+# Fail-closed: a same-repo run without the denylist secret HARD-FAILS; a fork PR
+# runs tiers 1+2 in a visible DEGRADED mode (never fails open silently). Findings
+# are masked by the engine (no matched literal / no digest); `::add-mask::` is
+# emitted before any finding line.
+#
+# Caller usage: see README "Confidentiality gate — caller usage".
+name: confidentiality-gate
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        description: "diff | tree | history | auto (auto ⇒ pull_request→diff, push→tree, schedule/dispatch→history)"
+        type: string
+        required: false
+        default: "auto"
+      gitleaks_version:
+        type: string
+        required: false
+        default: "8.18.4"
+      gitleaks_sha256:
+        description: "sha256 of gitleaks_<ver>_linux_x64.tar.gz (verified before use; mismatch ⇒ tier 1 skipped, never a tampered run)"
+        type: string
+        required: false
+        default: "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d"
+    secrets:
+      MF_CONFIDENTIALITY_DENYLIST:
+        description: "Salted-SHA-256 hashed denylist (org secret, selected public repos). Absent on fork PRs ⇒ degraded."
+        required: false
+      CONF_DENYLIST_PEPPER:
+        description: "Optional 2nd denylist secret; must match whatever built the denylist."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  confidentiality-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pin the ENGINE to the IMMUTABLE commit SHA of the reusable-workflow file
+      # GitHub resolved for this run (`github.job_workflow_sha`). This is the same
+      # commit the gate itself was loaded from, so the engine is byte-matched to the
+      # gate — and it is a resolved 40-hex SHA regardless of whether the caller wrote
+      # a branch, tag, or SHA in `uses:`. A movable tag / floating `main` can no
+      # longer select the engine (M-8). Fail-closed if it is not a 40-hex commit.
+      - name: Resolve engine SHA (immutable)
+        env:
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+        run: |
+          set -euo pipefail
+          SHA="${JOB_WORKFLOW_SHA:-}"
+          if ! printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            # Fallback: accept ONLY a 40-hex SHA parsed from job_workflow_ref's @<ref>.
+            CAND="${JOB_WORKFLOW_REF##*@}"
+            if printf '%s' "$CAND" | grep -qE '^[0-9a-f]{40}$'; then
+              SHA="$CAND"
+            else
+              echo "::error::confidentiality-gate: could not resolve an immutable engine commit SHA (job_workflow_sha='${JOB_WORKFLOW_SHA:-}', ref='${JOB_WORKFLOW_REF:-}'). A branch/tag ref is movable and MUST NOT select the engine. Failing closed."
+              exit 1
+            fi
+          fi
+          echo "ENGINE_SHA=$SHA" >> "$GITHUB_ENV"
+          echo "::notice::confidentiality-gate engine SHA = $SHA (immutable)"
+
+      - name: Checkout scan engine (metafactory-actions @ immutable SHA)
+        uses: actions/checkout@v4
+        with:
+          repository: the-metafactory/metafactory-actions
+          ref: ${{ env.ENGINE_SHA }}
+          path: _scan_engine
+          persist-credentials: false
+
+      - name: Caller integrity (advisory SHA-pin check)
+        run: |
+          set -euo pipefail
+          HITS="$(grep -RIl "metafactory-actions/.github/workflows/confidentiality-gate.yml" .github/workflows 2>/dev/null || true)"
+          # shellcheck disable=SC2086  # $HITS is an intentional space-separated file list
+          if [ -z "$HITS" ]; then
+            echo "::warning::caller integrity: no reference to the reusable confidentiality-gate found in .github/workflows (unexpected)"
+          elif grep -RhoE "metafactory-actions/.github/workflows/confidentiality-gate.yml@[0-9a-f]{40}" $HITS >/dev/null 2>&1; then
+            echo "::notice::caller integrity: gate is pinned by commit SHA ✓"
+          else
+            echo "::warning::caller integrity: the gate reference is NOT pinned by a 40-hex commit SHA — pin it (SOP) to close the check-name-spoof / floating-ref vector."
+          fi
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Key the cache on version + the EXPECTED sha256 so a differently-hashed
+      # payload lands in a different namespace. Integrity does NOT rely on the key,
+      # though — the setup step re-verifies the tarball on every run, incl. cache
+      # restores (H-4).
+      - name: Cache gitleaks
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/gitleaks
+          key: gitleaks-${{ inputs.gitleaks_version }}-${{ inputs.gitleaks_sha256 }}-linux-x64
+
+      - name: Setup gitleaks (pinned + sha256-verified on EVERY run, incl. cache restore)
+        env:
+          GL_VER: ${{ inputs.gitleaks_version }}
+          GL_SHA: ${{ inputs.gitleaks_sha256 }}
+        run: |
+          set -uo pipefail
+          GL_DIR="${{ runner.temp }}/gitleaks"
+          BIN="$GL_DIR/gitleaks"
+          TARBALL="$GL_DIR/gitleaks.tar.gz"
+          mkdir -p "$GL_DIR"
+
+          # Download the tarball only if it isn't already present (a cache restore
+          # brings it back). The binary is NOT trusted on presence — it is always
+          # re-derived from a re-verified tarball below.
+          if [ ! -f "$TARBALL" ]; then
+            URL="https://github.com/gitleaks/gitleaks/releases/download/v${GL_VER}/gitleaks_${GL_VER}_linux_x64.tar.gz"
+            if ! curl -sSL --retry 3 --retry-delay 2 --max-time 60 -o "$TARBALL" "$URL"; then
+              echo "::warning::gitleaks download failed (flake) — tier 1 skipped; tiers 2+3 still gate"
+              rm -f "$BIN"; exit 0
+            fi
+          fi
+
+          # ALWAYS verify the tarball's sha256 — whether freshly downloaded OR
+          # restored from cache. A poisoned cache entry (swapped tarball) fails here
+          # and tier 1 is skipped rather than run unverified (H-4).
+          if ! echo "${GL_SHA}  ${TARBALL}" | sha256sum -c - ; then
+            echo "::warning::gitleaks sha256 MISMATCH for v${GL_VER} — refusing to run an unverified/poisoned binary; tier 1 skipped (tiers 2+3 still gate)"
+            rm -f "$TARBALL" "$BIN"; exit 0
+          fi
+
+          # Re-extract from the verified tarball every run — overwrites any tampered
+          # binary a poisoned cache may have carried alongside a valid tarball.
+          if ! tar -xzf "$TARBALL" -C "$GL_DIR" gitleaks; then
+            echo "::warning::gitleaks extract failed — tier 1 skipped"; rm -f "$BIN"; exit 0
+          fi
+
+          if [ -x "$BIN" ]; then
+            echo "MF_GITLEAKS_BIN=$BIN" >> "$GITHUB_ENV"
+            echo "$GL_DIR" >> "$GITHUB_PATH"
+          fi
+
+      - name: Gate policy (fail-closed on same-repo missing/empty denylist)
+        env:
+          DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          # Classify the payload: absent | empty | valid. A PRESENT-BUT-EMPTY secret
+          # (the committed placeholder {"salt":"","entries":[]}, a salt-less doc, or
+          # unparseable JSON) must NOT count as "have denylist" — that would let tier 3
+          # run silently INERT and ship green (re-review F2). Validate the STRUCTURE
+          # (non-empty salt AND ≥1 entry), not mere presence. The engine also enforces
+          # this via --require-denylist on the same-repo path (backstop); this check
+          # fails early with an actionable message before the scan runs.
+          DL_STATE="valid"
+          if [ -z "${DENYLIST:-}" ]; then
+            DL_STATE="absent"
+          elif ! printf '%s' "${DENYLIST}" | jq -e '(.salt // "") != "" and ((.entries // []) | length) > 0' >/dev/null 2>&1; then
+            DL_STATE="empty"
+          fi
+          if [ "$DL_STATE" != "valid" ]; then
+            if [ "${IS_FORK}" = "true" ]; then
+              echo "::notice::confidentiality-gate DEGRADED — fork PR (denylist ${DL_STATE}): the denylist secret is unavailable to forks. Running tiers 1+2 only. A maintainer MUST run the full-denylist local gate before merging this fork PR (SOP OD-2)."
+            else
+              echo "::error::confidentiality-gate: MF_CONFIDENTIALITY_DENYLIST is ${DL_STATE} on a same-repo run (a placeholder like {\"salt\":\"\",\"entries\":[]} counts as empty). Tier 3 would be silently OFF. Add/repair the org secret (Settings ▸ Secrets ▸ Actions ▸ MF_CONFIDENTIALITY_DENYLIST ▸ selected public repos). Failing closed."
+              exit 1
+            fi
+          fi
+
+      - name: Determine scan mode
+        env:
+          MODE_IN: ${{ inputs.mode }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # Refuse pull_request_target: it exposes org secrets to fork-authored PRs
+          # AND checks out the BASE tree by default (so the PR's changes go unscanned)
+          # — a fail-open + secret-exposure footgun. Use pull_request only (M-9).
+          if [ "$EVENT" = "pull_request_target" ]; then
+            echo "::error::confidentiality-gate: pull_request_target is not supported (secret exposure to fork head + base-tree checkout ⇒ fail-open). Wire the gate on 'pull_request'. Failing closed."
+            exit 1
+          fi
+          MODE="$MODE_IN"
+          if [ -z "$MODE" ] || [ "$MODE" = "auto" ]; then
+            case "$EVENT" in
+              pull_request) MODE="diff" ;;
+              push) MODE="tree" ;;
+              schedule|workflow_dispatch) MODE="history" ;;
+              *) MODE="tree" ;;
+            esac
+          fi
+          echo "SCAN_MODE=$MODE" >> "$GITHUB_ENV"
+          echo "::notice::confidentiality-gate mode=$MODE (event=$EVENT)"
+
+      # Fetch the PR base and PROVE the diff range is trustworthy before the scan.
+      # A silently-empty or errored diff must never be read as "clean" (CONFIRMED-3).
+      - name: Fetch + verify PR base (diff mode)
+        if: ${{ env.SCAN_MODE == 'diff' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          PR_CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -euo pipefail
+          if [ -z "${BASE_REF:-}" ]; then
+            echo "::error::confidentiality-gate: diff mode but github.base_ref is empty — cannot compute a trustworthy PR diff. Failing closed."
+            exit 1
+          fi
+          # No `|| true`: a failed fetch now fails the job (set -e).
+          git fetch --no-tags --prune origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+          if ! git rev-parse --verify --quiet "refs/remotes/origin/${BASE_REF}" >/dev/null; then
+            echo "::error::confidentiality-gate: base ref origin/${BASE_REF} did not resolve after fetch — refusing to scan an empty/partial diff. Failing closed."
+            exit 1
+          fi
+          # If GitHub says this PR changes files, the scan range MUST reflect that.
+          # A range that resolves 0 files while changed_files>0 means we'd 'pass'
+          # having scanned nothing — fail closed instead.
+          CHANGED="${PR_CHANGED_FILES:-0}"
+          case "$CHANGED" in ''|*[!0-9]*) CHANGED=0 ;; esac
+          if [ "$CHANGED" -gt 0 ]; then
+            RANGE_FILES="$(git diff --name-only "origin/${BASE_REF}...HEAD" | grep -c . || true)"
+            if [ "${RANGE_FILES:-0}" -eq 0 ]; then
+              echo "::error::confidentiality-gate: PR reports ${CHANGED} changed file(s) but scan range origin/${BASE_REF}...HEAD resolved 0 files — refusing to report clean on an empty diff. Failing closed."
+              exit 1
+            fi
+            echo "::notice::confidentiality-gate diff range covers ${RANGE_FILES} file(s) (PR changed_files=${CHANGED})"
+          fi
+
+      # Run the interpreter from a TRUSTED, clean directory (runner.temp) — NEVER
+      # from the caller workspace. `bun` auto-loads `bunfig.toml` (and its `preload`
+      # → arbitrary code execution) from its process CWD; with CWD inside the
+      # attacker-controlled checkout, a PR that adds a root `bunfig.toml` would run
+      # code in this secret-bearing job. bun does not walk parent dirs for bunfig, so
+      # a clean CWD + absolute engine path fully closes it (CONFIRMED-1). The engine
+      # scans the caller tree via `--cwd "$WORKSPACE"` (drives every git/file op),
+      # while bun's own CWD stays trusted. `--gitleaks-config` pins a trusted gitleaks
+      # config so an in-tree `.gitleaks.toml` can't disable tier 1 (CONFIRMED-2), and
+      # `--require-denylist` (same-repo runs only) fails closed on a present-but-empty
+      # denylist payload (M-5). `--gitleaks-config`/`--require-denylist` land with the
+      # engine in #9; `--cwd` already exists.
+      - name: Run confidentiality scan
+        working-directory: ${{ runner.temp }}
+        env:
+          # Secrets → env (never interpolated into the script body).
+          MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+          CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}
+          # Attacker-controllable PR metadata → env only (avoids script injection).
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_REF: ${{ github.base_ref }}
+          WORKSPACE: ${{ github.workspace }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+        run: |
+          set -euo pipefail
+          ENGINE="$WORKSPACE/_scan_engine/scan/confidentiality-scan.ts"
+          PATTERNS="$WORKSPACE/_scan_engine/scan/public-patterns.yaml"
+          GITLEAKS_CONFIG="$WORKSPACE/_scan_engine/scan/gitleaks.toml"
+          # Scan the caller tree by explicit path (--cwd); bun's process CWD stays
+          # trusted (runner.temp), so a workspace-root bunfig.toml cannot run.
+          ARGS=("$SCAN_MODE" --cwd "$WORKSPACE" --patterns "$PATTERNS" --gitleaks-config "$GITLEAKS_CONFIG")
+          # Same-repo runs (not a fork) MUST have a non-empty denylist — require it so
+          # a present-but-empty secret fails closed instead of running tier 3 inert (M-5).
+          # Fork PRs are legitimately degraded (no secret), so do NOT require it there.
+          if [ "${IS_FORK:-}" != "true" ]; then
+            ARGS+=(--require-denylist)
+          fi
+          if [ "$SCAN_MODE" = "diff" ]; then
+            ARGS+=(--range "origin/${BASE_REF}...HEAD")
+            [ -n "${PR_TITLE:-}" ] && ARGS+=(--extra-text "$PR_TITLE")
+            [ -n "${PR_BODY:-}" ] && ARGS+=(--extra-text "$PR_BODY")
+            [ -n "${HEAD_BRANCH:-}" ] && ARGS+=(--extra-text "$HEAD_BRANCH")
+          fi
+          echo "running (cwd=$PWD, trusted): bun $ENGINE ${ARGS[*]}"
+          bun "$ENGINE" "${ARGS[@]}"
