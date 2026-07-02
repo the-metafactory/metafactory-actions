@@ -1,0 +1,13 @@
+{
+  "name": "A_COUNT_DOWNLOADS",
+  "version": "1.0.0",
+  "description": "Count package downloads per package from the metafactory production or dev audit log (D1)",
+  "input": {
+    "environment": { "type": "string" }
+  },
+  "output": {
+    "downloadStats": { "type": "object" }
+  },
+  "requires": ["shell"],
+  "tags": ["registry", "downloads", "stats", "d1", "audit-log"]
+}

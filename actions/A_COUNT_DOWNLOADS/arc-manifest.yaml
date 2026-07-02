@@ -1,0 +1,24 @@
+schema: arc/v1
+name: A_COUNT_DOWNLOADS
+version: 1.0.0
+type: action
+author:
+  name: metafactory
+  github: the-metafactory
+capabilities:
+  filesystem:
+    # Action cd's into METAFACTORY_PATH / PULSE_DEV_ROOT (the meta-factory
+    # checkout) to run wrangler in its auth context. The actual scope is
+    # dynamic — declared path here is advisory only, not a hardcoded
+    # operator-tree assumption (see A_FETCH_BLUEPRINTS for the same pattern).
+    read: ["./"]
+    write: []
+  network:
+    - domain: "api.cloudflare.com"
+      reason: "wrangler d1 execute --remote queries the production/dev D1 database"
+    - domain: "registry.npmjs.org"
+      reason: "bunx resolves the wrangler package from npm if not already cached"
+  bash:
+    allowed: true
+  secrets:
+    - CLOUDFLARE_API_TOKEN
