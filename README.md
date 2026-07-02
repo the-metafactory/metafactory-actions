@@ -176,13 +176,47 @@ Then add the observed `confidentiality-gate` check to the repo's **required
 status checks** (the exact context name is read from the first run — see the
 compass rollout tooling).
 
+### Burn-in vs. enforce (`require_denylist` input)
+
+A repo adopting the gate enters **burn-in**: the workflow is present but warn-only
+and the org denylist secret is not yet populated. Fail-closed-on-absent is correct
+when **enforcing**, but it would fail closed on *every* same-repo PR during burn-in —
+so burn-in would validate nothing. The `require_denylist` input picks the posture:
+
+| `require_denylist` | Same-repo + denylist absent/empty | Purpose |
+|---|---|---|
+| `true` **(default)** | **FAIL CLOSED** (`::error::`, exit 1) | **Enforce.** A mis-wired secret can't ship green with tier 3 off (fix-8). |
+| `false` | **DEGRADE** to tiers 1+2 + `::warning::` (never fails closed) | **Burn-in only.** Same degraded path fork PRs use — validate tiers 1+2 while the denylist is populated. |
+
+The default is `true` — a caller that forgets the flag fails closed (secure default).
+A same-repo run **with a valid denylist** always runs the full tiers 1+2+3 scan
+regardless of this input; the flag only governs the absent/empty case. Set
+`require_denylist: false` on the `with:` of the reusable-workflow call **only** while
+a repo is in burn-in, and remove it (revert to enforce) before the gate becomes a
+required check:
+
+```yaml
+  gate:
+    uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@<PIN-40-HEX-SHA>
+    with:
+      engine_sha: <PIN-40-HEX-SHA>   # REQUIRED — same 40-hex SHA you pin uses:@ at (see caller usage above)
+      require_denylist: false        # BURN-IN ONLY — degrade same-repo to tiers 1+2 + warn; remove to enforce
+    secrets:
+      MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
+      CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}   # optional; omit if unused
+```
+
 ### Degraded-fork contract (never fails open silently)
 
-- **Same-repo run without the denylist secret → HARD FAIL** naming the org-secret
-  visibility list. The denylist tier is never silently skipped on a trusted run.
+- **Same-repo run without the denylist secret → HARD FAIL** (when enforcing —
+  `require_denylist: true`, the default) naming the org-secret visibility list. The
+  denylist tier is never silently skipped on a trusted run. During **burn-in**
+  (`require_denylist: false`) the same-repo path degrades to **tiers 1+2 + a
+  `::warning::`** instead — see "Burn-in vs. enforce" above.
 - **Fork PR → DEGRADED mode**: the org secret is unavailable to forks by design,
   so the gate runs **tiers 1+2 only** and emits a visible `::notice::`. A maintainer
   **must** run the full-denylist local gate before merging a fork PR (SOP OD-2).
+  `require_denylist` never affects forks — they are always degraded.
 - **gitleaks (tier 1)** is pinned by version **and sha256-verified on every run,
   including cache restores** — the tarball is re-verified before use and the binary
   re-extracted from it, so a poisoned cache cannot slip an unverified binary past the
