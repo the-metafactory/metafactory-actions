@@ -14,6 +14,18 @@ name: confidentiality-gate
 on:
   workflow_call:
     inputs:
+      engine_sha:
+        description: >-
+          Immutable 40-hex commit SHA of the-metafactory/metafactory-actions to load
+          the scan ENGINE from. MUST equal the SHA the caller pins THIS reusable at in
+          `uses: ...@<sha>`, so the engine stays byte-matched to the gate (M-8). Required
+          because `github.job_workflow_sha` is EMPTY on cross-repo caller runs, so it is
+          not a reliable immutability anchor — this explicit pin is. Validated as 40-hex
+          and fail-closed if it is not (a movable branch/tag ref must never select the
+          engine). Only a metafactory-actions SHA is honoured; the engine repository is
+          hardcoded, never a caller input.
+        type: string
+        required: true
       mode:
         description: "diff | tree | history | auto (auto ⇒ pull_request→diff, push→tree, schedule/dispatch→history)"
         type: string
@@ -48,31 +60,44 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Pin the ENGINE to the IMMUTABLE commit SHA of the reusable-workflow file
-      # GitHub resolved for this run (`github.job_workflow_sha`). This is the same
-      # commit the gate itself was loaded from, so the engine is byte-matched to the
-      # gate — and it is a resolved 40-hex SHA regardless of whether the caller wrote
-      # a branch, tag, or SHA in `uses:`. A movable tag / floating `main` can no
-      # longer select the engine (M-8). Fail-closed if it is not a 40-hex commit.
+      # Pin the ENGINE to an IMMUTABLE metafactory-actions commit SHA. The reliable
+      # source is the explicit `engine_sha` input: the caller sets it to the SAME
+      # 40-hex SHA it pins THIS reusable at in `uses: ...@<sha>`, so the engine is
+      # byte-matched to the gate. `github.job_workflow_sha` was the old primary source
+      # but it resolves EMPTY on real cross-repo caller runs (a GitHub reusable-workflow
+      # limitation), which failed the gate closed at step 1 on every caller — the gate
+      # never scanned. It is kept only as a belt-and-suspenders fallback for the case
+      # where the input is somehow missing/malformed but GitHub DID populate it.
+      # Immutability (M-8) is preserved either way: the resolved value MUST be 40-hex,
+      # so a movable branch/tag ref can never select the engine, and the engine
+      # repository is hardcoded below (a caller can only pin a metafactory-actions SHA,
+      # never point the checkout elsewhere).
       - name: Resolve engine SHA (immutable)
         env:
+          ENGINE_SHA_INPUT: ${{ inputs.engine_sha }}
           JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
-          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
         run: |
           set -euo pipefail
-          SHA="${JOB_WORKFLOW_SHA:-}"
-          if ! printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            # Fallback: accept ONLY a 40-hex SHA parsed from job_workflow_ref's @<ref>.
-            CAND="${JOB_WORKFLOW_REF##*@}"
-            if printf '%s' "$CAND" | grep -qE '^[0-9a-f]{40}$'; then
-              SHA="$CAND"
+          SHA=""
+          IN="${ENGINE_SHA_INPUT:-}"
+          if printf '%s' "$IN" | grep -qE '^[0-9a-f]{40}$'; then
+            SHA="$IN"
+            echo "::notice::confidentiality-gate engine SHA = $SHA (immutable; source=engine_sha input)"
+          else
+            # Belt-and-suspenders: the input is required, but if it arrives empty or
+            # malformed AND GitHub happened to populate job_workflow_sha with a valid
+            # 40-hex, fall back to that rather than failing. Both paths enforce 40-hex.
+            JWS="${JOB_WORKFLOW_SHA:-}"
+            if printf '%s' "$JWS" | grep -qE '^[0-9a-f]{40}$'; then
+              SHA="$JWS"
+              echo "::warning::confidentiality-gate: engine_sha input '${IN}' is not a 40-hex commit SHA; falling back to github.job_workflow_sha. Pass engine_sha=<the metafactory-actions SHA you pin uses:@ at> for a reliable pin."
+              echo "::notice::confidentiality-gate engine SHA = $SHA (immutable; source=job_workflow_sha fallback)"
             else
-              echo "::error::confidentiality-gate: could not resolve an immutable engine commit SHA (job_workflow_sha='${JOB_WORKFLOW_SHA:-}', ref='${JOB_WORKFLOW_REF:-}'). A branch/tag ref is movable and MUST NOT select the engine. Failing closed."
+              echo "::error::confidentiality-gate: engine_sha input '${IN}' is not a 40-hex commit SHA and github.job_workflow_sha is empty. A branch/tag ref is movable and MUST NOT select the engine. Set engine_sha to the SAME 40-hex SHA you pin this reusable at in uses:@<sha>. Failing closed."
               exit 1
             fi
           fi
           echo "ENGINE_SHA=$SHA" >> "$GITHUB_ENV"
-          echo "::notice::confidentiality-gate engine SHA = $SHA (immutable)"
 
       - name: Checkout scan engine (metafactory-actions @ immutable SHA)
         uses: actions/checkout@v4

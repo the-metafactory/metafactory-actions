@@ -1,0 +1,14 @@
+# actionlint config.
+#
+# `github.job_workflow_sha` is a REAL, documented GitHub Actions context property
+# ("For a job using a reusable workflow, the commit SHA for the reusable workflow
+# file" — docs.github.com/actions ... contexts#github-context), but actionlint's
+# bundled github-context model does not include it (still absent as of v1.7.12).
+# The confidentiality gate keeps it as a belt-and-suspenders FALLBACK for resolving
+# the engine SHA (the primary source is the required `engine_sha` input, because
+# job_workflow_sha resolves EMPTY on cross-repo caller runs). Suppress only that
+# one stale-model false positive, scoped to the gate file.
+paths:
+  .github/workflows/confidentiality-gate.yml:
+    ignore:
+      - 'property "job_workflow_sha" is not defined'
