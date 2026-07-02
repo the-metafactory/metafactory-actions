@@ -1,0 +1,12 @@
+# Pinned gitleaks config for the confidentiality gate (review #9 CONFIRMED-2).
+#
+# The engine ALWAYS invokes gitleaks with `--config <this file>`. That makes
+# gitleaks ignore any `.gitleaks.toml` committed in the scanned target repo, so
+# an attacker cannot disable tier-1 by committing a catch-all `[allowlist]`.
+#
+# `useDefault = true` inherits gitleaks' full built-in ruleset — we pin WHERE
+# the config comes from (a trusted, in-repo file), not WHICH rules run.
+title = "metafactory confidentiality gate — pinned gitleaks baseline"
+
+[extend]
+useDefault = true

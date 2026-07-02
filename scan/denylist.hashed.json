@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "generated": "",
+  "salt": "",
+  "entries": [],
+  "_note": "PLACEHOLDER — intentionally empty. A populated confidentiality denylist is NEVER committed to this public repo (design doc §4 L1: 'No public hashed denylist file exists'). Tier 3 is inert while salt is empty. At runtime the engine reads a populated, salted-SHA-256 hashed denylist from the MF_CONFIDENTIALITY_DENYLIST org secret (CI) or the private installed path ~/.config/metafactory/pkg/repos/compass/confidentiality/ (hooks). Schema: {version, generated, salt, entries:[{hash, class, action, len, id?}]} where hash=sha256(salt:[pepper:]canon(term)) and len=canon(term).length; an optional CONF_DENYLIST_PEPPER env secret must match whatever built the payload. The plaintext canonical lives only in PRIVATE compass. See scan/README.md."
+}
