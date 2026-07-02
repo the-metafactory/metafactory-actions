@@ -138,9 +138,12 @@ history, and the merge-bypass path. They drive the shared scan engine in
 
 Drop this into each public repo. **Pin both by 40-hex commit SHA** — a branch/tag
 ref is movable (check-name-spoof + it would select the engine too), and the gate
-now **fails closed** if it cannot resolve an immutable engine SHA. **Pass only the
-named secrets** — never `secrets: inherit` (that hands every caller secret to the
-reusable workflow; scope the blast radius to just what the gate needs):
+now **fails closed** if it cannot resolve an immutable engine SHA. **Pass that same
+SHA as the gate's `engine_sha` input** — it is REQUIRED and is what pins the scan
+engine (`github.job_workflow_sha` is empty on cross-repo caller runs, so the gate
+cannot derive the SHA itself). **Pass only the named secrets** — never
+`secrets: inherit` (that hands every caller secret to the reusable workflow; scope
+the blast radius to just what the gate needs):
 
 ```yaml
 # .github/workflows/confidentiality.yml
@@ -154,6 +157,11 @@ on:
 jobs:
   gate:
     uses: the-metafactory/metafactory-actions/.github/workflows/confidentiality-gate.yml@<PIN-40-HEX-SHA>
+    with:
+      # REQUIRED. Set to the SAME 40-hex SHA you pin `uses:@` at above. This is the
+      # engine's immutability anchor — github.job_workflow_sha is empty on caller
+      # runs, so the gate cannot derive it and needs this explicit pin.
+      engine_sha: <PIN-40-HEX-SHA>
     secrets:
       MF_CONFIDENTIALITY_DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
       CONF_DENYLIST_PEPPER: ${{ secrets.CONF_DENYLIST_PEPPER }}   # optional; omit if unused
@@ -190,7 +198,11 @@ compass rollout tooling).
 - **Diff mode is fail-closed**: the gate fetches and verifies the PR base ref and
   asserts the scan range covers the PR's changed files — a git/fetch error or an
   empty range never reads as "clean."
-- The engine is checked out at the **immutable commit SHA** GitHub resolved for the
-  reusable-workflow file (`github.job_workflow_sha`), so the engine is byte-matched
-  to the gate. A movable tag or floating `main` can no longer select the engine; the
-  gate fails closed if it cannot resolve a 40-hex commit.
+- The engine is checked out at the **immutable commit SHA** the caller passes as the
+  required `engine_sha` input (set to the same SHA the reusable is pinned at in
+  `uses:@`), so the engine is byte-matched to the gate. `github.job_workflow_sha` is
+  empty on cross-repo caller runs and is kept only as a non-empty fallback. The engine
+  **repository is hardcoded** (`the-metafactory/metafactory-actions`) — never a caller
+  input — so a caller can only pin a metafactory-actions SHA, not redirect the checkout.
+  A movable tag or floating `main` can no longer select the engine; the gate fails
+  closed if `engine_sha` is not a 40-hex commit and no valid fallback exists.
