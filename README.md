@@ -45,7 +45,7 @@ Actions are independent, composable units. Each has an `action.json` manifest an
 | **A_FETCH_BLUEPRINTS** | Walk dev_root, parse every blueprint.yaml, emit per-repo feature index | shell |
 | **A_SCAN_PR_FEATURE_IDS** | Per repo, list merged PRs and extract feature IDs from titles | shell |
 | **A_DETECT_DRIFT** | Cross-reference blueprint features vs merged PRs; surface drift | shell |
-| **A_COUNT_DOWNLOADS** | Count package downloads per package from production audit log (D1) | shell |
+| **A_COUNT_DOWNLOADS** | Count package downloads per package from the production or dev audit log (D1) | shell |
 
 ## Flows
 

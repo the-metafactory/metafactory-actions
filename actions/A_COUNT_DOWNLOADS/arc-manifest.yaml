@@ -9,7 +9,10 @@ capabilities:
   filesystem:
     read: ["./"]
     write: []
-  network: []
+  network:
+    - domain: "api.cloudflare.com"
+      reason: "wrangler d1 execute --remote queries the production/dev D1 database"
   bash:
     allowed: true
-  secrets: []
+  secrets:
+    - CLOUDFLARE_API_TOKEN
