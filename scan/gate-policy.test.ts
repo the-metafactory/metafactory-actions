@@ -51,6 +51,18 @@ function runPolicy(overrides: Record<string, string | undefined>): PolicyResult 
   }
 }
 
+// `gate-policy.sh assert-decision` — the scan-step guard. Validates the
+// GATE_DECISION the classifier already emitted (read from env), independent of the
+// classify-mode inputs. `undefined` ⇒ the variable is unset.
+function runAssert(gateDecision: string | undefined): { code: number; stdout: string } {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (typeof v === "string") env[k] = v;
+  delete env.GATE_DECISION;
+  if (gateDecision !== undefined) env.GATE_DECISION = gateDecision;
+  const proc = Bun.spawnSync(["bash", SCRIPT, "assert-decision"], { env, stdout: "pipe", stderr: "pipe" });
+  return { code: proc.exitCode ?? 1, stdout: proc.stdout ? new TextDecoder().decode(proc.stdout) : "" };
+}
+
 describe("gate-policy.sh — confidentiality-gate classification", () => {
   // ── UNCHANGED: fork PR (untrusted, secret unavailable) → degraded tiers 1+2 ──
   test("fork PR + denylist absent → degraded, exit 0, fork notice", () => {
@@ -121,5 +133,35 @@ describe("gate-policy.sh — confidentiality-gate classification", () => {
     expect(r.decision).toBe("degraded");
     expect(r.stdout).toMatch(/::warning::/);
     expect(r.stdout).not.toMatch(/::error::/);
+  });
+});
+
+describe("gate-policy.sh assert-decision — scan-step guard (refactor-proof, fail-closed)", () => {
+  // Known decisions the classifier emits → proceed.
+  test("GATE_DECISION=full → exit 0", () => {
+    expect(runAssert("full").code).toBe(0);
+  });
+
+  test("GATE_DECISION=degraded → exit 0", () => {
+    expect(runAssert("degraded").code).toBe(0);
+  });
+
+  // The fail-open we're closing: an undetermined decision must NOT reach the scan.
+  test("GATE_DECISION unset → FAIL CLOSED (exit 1, ::error::)", () => {
+    const r = runAssert(undefined);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/::error::/);
+  });
+
+  test("GATE_DECISION empty → FAIL CLOSED", () => {
+    const r = runAssert("");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/::error::/);
+  });
+
+  test("GATE_DECISION unknown value → FAIL CLOSED (never falls through to a scan)", () => {
+    const r = runAssert("bogus");
+    expect(r.code).toBe(1);
+    expect(r.stdout).toMatch(/::error::/);
   });
 });

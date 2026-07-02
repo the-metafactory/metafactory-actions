@@ -70,8 +70,12 @@ the `DENYLIST` payload, and the workflow's `require_denylist` input, it emits
 or same-repo burn-in with `require_denylist=false` → tiers 1+2, tier 3 off), or
 exits non-zero to fail closed (same-repo + absent/empty + enforce). The branch logic
 lives in this single executed file so it can't drift from its test
-(`gate-policy.test.ts`). Burn-in-vs-enforce is documented in the top-level README
-"Burn-in vs. enforce (`require_denylist` input)".
+(`gate-policy.test.ts`). The scan step then calls `gate-policy.sh assert-decision`
+**before** it scans: if `GATE_DECISION` is not one of `full|degraded` (unset/empty/
+unknown — the classifier didn't run first) it **fails closed**, so a future
+step-order regression can't let a scan proceed with tier 3 silently off. The same
+file defines the `full|degraded` vocabulary AND defends it. Burn-in-vs-enforce is
+documented in the top-level README "Burn-in vs. enforce (`require_denylist` input)".
 
 **Fail-closed discipline:** any underlying **git** command that errors (bad
 range, non-git dir, shallow checkout where `origin/main` isn't fetched) exits `3`

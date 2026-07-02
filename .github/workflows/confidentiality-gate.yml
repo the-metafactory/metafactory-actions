@@ -288,6 +288,12 @@ jobs:
           WORKSPACE: ${{ github.workspace }}
         run: |
           set -euo pipefail
+          # Guard the classifier→scan contract BEFORE scanning: refuse to run unless the
+          # Gate policy step emitted a known GATE_DECISION (full|degraded). Unset/empty/
+          # unknown ⇒ the classifier did not run first (e.g. a future step-order
+          # regression) ⇒ FAIL CLOSED, never silently degrade tier 3 off. The same file
+          # that defines full|degraded also defends them, so the two can't drift.
+          bash "$WORKSPACE/_scan_engine/scan/gate-policy.sh" assert-decision
           ENGINE="$WORKSPACE/_scan_engine/scan/confidentiality-scan.ts"
           PATTERNS="$WORKSPACE/_scan_engine/scan/public-patterns.yaml"
           GITLEAKS_CONFIG="$WORKSPACE/_scan_engine/scan/gitleaks.toml"

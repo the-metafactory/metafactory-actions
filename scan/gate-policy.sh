@@ -15,14 +15,51 @@
 #   REQUIRE_DENYLIST  "false" ⇒ degrade to tiers 1+2 + warn on an absent denylist (BURN-IN only);
 #                     anything else (incl. unset) ⇒ "true" — the SECURE DEFAULT: fail closed.
 #
+# Modes:
+#   (default)          classify this run and emit GATE_DECISION (uses IS_FORK / DENYLIST /
+#                      REQUIRE_DENYLIST above). Called by the workflow's "Gate policy" step.
+#   assert-decision    validate the GATE_DECISION the classifier already emitted (from env)
+#                      and FAIL CLOSED on anything not in {full,degraded}. Called by the
+#                      scan step BEFORE it scans, so a step-order regression that skipped
+#                      the classifier can't let the scan proceed tier-3-off (fail-open).
+#
 # Output:
 #   Appends GATE_DECISION=<full|degraded> to $GITHUB_ENV (when set) for the scan step,
 #   and echoes the same line to stdout (test capture + non-Actions runs).
 #   Emits ::error:: / ::warning:: / ::notice:: annotations.
 #   Exit 0 ⇒ proceed (full or degraded).
-#   Exit 1 ⇒ FAIL CLOSED (same-repo, denylist absent/empty, require_denylist enforced).
+#   Exit 1 ⇒ FAIL CLOSED (same-repo, denylist absent/empty, require_denylist enforced;
+#            or assert-decision saw an unset/empty/unknown GATE_DECISION).
 set -euo pipefail
 
+# The decision vocabulary — defined ONCE here and shared by the classifier (which
+# EMITS it) and the scan step's `assert-decision` guard (which DEFENDS it), so the
+# two can never drift. Add a new decision value in this one place.
+is_known_decision() { case "${1:-}" in full|degraded) return 0 ;; *) return 1 ;; esac; }
+
+emit_decision() {
+  # $1 = full | degraded. Defensive: the classifier must never emit a value the
+  # scan-step guard would later reject — fail closed if it somehow tries.
+  if ! is_known_decision "$1"; then
+    echo "::error::confidentiality-gate: internal — refusing to emit unknown GATE_DECISION '$1'. Failing closed."
+    exit 1
+  fi
+  if [ -n "${GITHUB_ENV:-}" ]; then echo "GATE_DECISION=$1" >> "$GITHUB_ENV"; fi
+  echo "GATE_DECISION=$1"
+}
+
+# ── assert-decision mode ── the scan step calls `gate-policy.sh assert-decision`
+# BEFORE it scans. An unset/empty/unknown GATE_DECISION means the classifier did not
+# run before the scan (e.g. a future step-order regression) — FAIL CLOSED rather than
+# let the scan proceed with an undetermined tier-3 posture. Strictly additive: this
+# only ADDS a fail-closed path, it never changes a reachable classify-mode outcome.
+if [ "${1:-}" = "assert-decision" ]; then
+  if is_known_decision "${GATE_DECISION:-}"; then exit 0; fi
+  echo "::error::confidentiality-gate: GATE_DECISION='${GATE_DECISION:-}' is not one of full|degraded — the Gate policy classifier did not run before the scan (step-order regression?). Refusing to scan with an undetermined tier-3 posture. Failing closed."
+  exit 1
+fi
+
+# ── classify mode (default): emit GATE_DECISION for this run. ──
 IS_FORK="${IS_FORK:-}"
 # Secure default: only an EXPLICIT "false" opts out of fail-closed. Unset / empty /
 # any other value enforces — a caller that forgets the flag fails closed.
@@ -39,12 +76,6 @@ if [ -z "${DENYLIST:-}" ]; then
 elif ! printf '%s' "${DENYLIST}" | jq -e '(.salt // "") != "" and ((.entries // []) | length) > 0' >/dev/null 2>&1; then
   DL_STATE="empty"
 fi
-
-emit_decision() {
-  # $1 = full | degraded
-  if [ -n "${GITHUB_ENV:-}" ]; then echo "GATE_DECISION=$1" >> "$GITHUB_ENV"; fi
-  echo "GATE_DECISION=$1"
-}
 
 # ── Fork PR (untrusted) — ALWAYS degraded tiers 1+2; the org secret is unavailable
 #    to forks, so tier 3 is legitimately off and require_denylist never applies here.
