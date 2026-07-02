@@ -61,7 +61,17 @@ Flags: `--staged`, `--range <A..B>`, `--denylist <path>`, `--patterns <path>`,
 absent/empty denylist **fails closed** (exit 3) instead of degrading silently.
 Set it on the **trusted (non-fork) CI path** so a mis-wired org secret can't ship
 a green check with tier 3 off. Leave it OFF for fork PRs (which legitimately run
-degraded, tiers 1+2 only).
+degraded, tiers 1+2 only) — and for the **burn-in** same-repo path (below).
+
+**CI classifier — `gate-policy.sh`.** The reusable gate workflow decides *whether*
+to pass `--require-denylist` in one place: `scan/gate-policy.sh`. Given `IS_FORK`,
+the `DENYLIST` payload, and the workflow's `require_denylist` input, it emits
+`GATE_DECISION=full` (same-repo + valid denylist → require it) or `degraded` (fork,
+or same-repo burn-in with `require_denylist=false` → tiers 1+2, tier 3 off), or
+exits non-zero to fail closed (same-repo + absent/empty + enforce). The branch logic
+lives in this single executed file so it can't drift from its test
+(`gate-policy.test.ts`). Burn-in-vs-enforce is documented in the top-level README
+"Burn-in vs. enforce (`require_denylist` input)".
 
 **Fail-closed discipline:** any underlying **git** command that errors (bad
 range, non-git dir, shallow checkout where `origin/main` isn't fetched) exits `3`

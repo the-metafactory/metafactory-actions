@@ -3,10 +3,13 @@
 # the caller's event, with a pinned+cached+sha256-verified gitleaks (tier 1),
 # public shape patterns (tier 2), and the org-secret hashed denylist (tier 3).
 #
-# Fail-closed: a same-repo run without the denylist secret HARD-FAILS; a fork PR
-# runs tiers 1+2 in a visible DEGRADED mode (never fails open silently). Findings
-# are masked by the engine (no matched literal / no digest); `::add-mask::` is
-# emitted before any finding line.
+# Fail-closed: a same-repo run without the denylist secret HARD-FAILS when enforcing
+# (require_denylist=true, the default); a fork PR runs tiers 1+2 in a visible DEGRADED
+# mode (never fails open silently). During BURN-IN a caller may pass
+# require_denylist=false to degrade the same-repo path to tiers 1+2 + a WARNING
+# instead of failing closed — see the `require_denylist` input. Findings are masked
+# by the engine (no matched literal / no digest); `::add-mask::` is emitted before
+# any finding line.
 #
 # Caller usage: see README "Confidentiality gate — caller usage".
 name: confidentiality-gate
@@ -40,6 +43,11 @@ on:
         type: string
         required: false
         default: "ba6dbb656933921c775ee5a2d1c13a91046e7952e9d919f9bac4cec61d628e7d"
+      require_denylist:
+        description: "Fail closed when the tier-3 denylist secret is absent/empty on the trusted same-repo path. Set false ONLY during burn-in to degrade to tiers 1+2 + warn; leave true (default) when enforcing."
+        type: boolean
+        required: false
+        default: true
     secrets:
       MF_CONFIDENTIALITY_DENYLIST:
         description: "Salted-SHA-256 hashed denylist (org secret, selected public repos). Absent on fork PRs ⇒ degraded."
@@ -176,33 +184,24 @@ jobs:
             echo "$GL_DIR" >> "$GITHUB_PATH"
           fi
 
-      - name: Gate policy (fail-closed on same-repo missing/empty denylist)
+      # Classify this run: fork/same-repo × denylist-state × require_denylist. The
+      # branch logic is security-critical and lives in ONE executed file
+      # (scan/gate-policy.sh) so it cannot drift between this YAML and its test
+      # (scan/gate-policy.test.ts). The classifier ships in the engine bundle checked
+      # out above (_scan_engine @ the immutable ENGINE_SHA), so it is byte-pinned to
+      # the gate. It appends GATE_DECISION (full|degraded) to $GITHUB_ENV for the scan
+      # step, or exits 1 to FAIL CLOSED (same-repo + absent/empty denylist + enforce).
+      # A present-but-empty secret ({"salt":"","entries":[]}) is classified 'empty',
+      # never 'valid' — tier 3 can't run silently INERT and ship green (re-review F2).
+      - name: Gate policy (fail-closed on same-repo missing/empty denylist; degrade in burn-in)
         env:
           DENYLIST: ${{ secrets.MF_CONFIDENTIALITY_DENYLIST }}
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          REQUIRE_DENYLIST: ${{ inputs.require_denylist }}
+          POLICY_SH: ${{ github.workspace }}/_scan_engine/scan/gate-policy.sh
         run: |
           set -euo pipefail
-          # Classify the payload: absent | empty | valid. A PRESENT-BUT-EMPTY secret
-          # (the committed placeholder {"salt":"","entries":[]}, a salt-less doc, or
-          # unparseable JSON) must NOT count as "have denylist" — that would let tier 3
-          # run silently INERT and ship green (re-review F2). Validate the STRUCTURE
-          # (non-empty salt AND ≥1 entry), not mere presence. The engine also enforces
-          # this via --require-denylist on the same-repo path (backstop); this check
-          # fails early with an actionable message before the scan runs.
-          DL_STATE="valid"
-          if [ -z "${DENYLIST:-}" ]; then
-            DL_STATE="absent"
-          elif ! printf '%s' "${DENYLIST}" | jq -e '(.salt // "") != "" and ((.entries // []) | length) > 0' >/dev/null 2>&1; then
-            DL_STATE="empty"
-          fi
-          if [ "$DL_STATE" != "valid" ]; then
-            if [ "${IS_FORK}" = "true" ]; then
-              echo "::notice::confidentiality-gate DEGRADED — fork PR (denylist ${DL_STATE}): the denylist secret is unavailable to forks. Running tiers 1+2 only. A maintainer MUST run the full-denylist local gate before merging this fork PR (SOP OD-2)."
-            else
-              echo "::error::confidentiality-gate: MF_CONFIDENTIALITY_DENYLIST is ${DL_STATE} on a same-repo run (a placeholder like {\"salt\":\"\",\"entries\":[]} counts as empty). Tier 3 would be silently OFF. Add/repair the org secret (Settings ▸ Secrets ▸ Actions ▸ MF_CONFIDENTIALITY_DENYLIST ▸ selected public repos). Failing closed."
-              exit 1
-            fi
-          fi
+          bash "$POLICY_SH"
 
       - name: Determine scan mode
         env:
@@ -271,7 +270,8 @@ jobs:
       # scans the caller tree via `--cwd "$WORKSPACE"` (drives every git/file op),
       # while bun's own CWD stays trusted. `--gitleaks-config` pins a trusted gitleaks
       # config so an in-tree `.gitleaks.toml` can't disable tier 1 (CONFIRMED-2), and
-      # `--require-denylist` (same-repo runs only) fails closed on a present-but-empty
+      # `--require-denylist` (the FULL path only — same-repo + valid denylist, per the
+      # Gate policy classification GATE_DECISION=full) fails closed on a present-but-empty
       # denylist payload (M-5). `--gitleaks-config`/`--require-denylist` land with the
       # engine in #9; `--cwd` already exists.
       - name: Run confidentiality scan
@@ -286,7 +286,6 @@ jobs:
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           BASE_REF: ${{ github.base_ref }}
           WORKSPACE: ${{ github.workspace }}
-          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         run: |
           set -euo pipefail
           ENGINE="$WORKSPACE/_scan_engine/scan/confidentiality-scan.ts"
@@ -295,10 +294,12 @@ jobs:
           # Scan the caller tree by explicit path (--cwd); bun's process CWD stays
           # trusted (runner.temp), so a workspace-root bunfig.toml cannot run.
           ARGS=("$SCAN_MODE" --cwd "$WORKSPACE" --patterns "$PATTERNS" --gitleaks-config "$GITLEAKS_CONFIG")
-          # Same-repo runs (not a fork) MUST have a non-empty denylist — require it so
-          # a present-but-empty secret fails closed instead of running tier 3 inert (M-5).
-          # Fork PRs are legitimately degraded (no secret), so do NOT require it there.
-          if [ "${IS_FORK:-}" != "true" ]; then
+          # Enforce tier 3 (--require-denylist) ONLY on the FULL path — same-repo with a
+          # valid denylist, as classified by the Gate policy step (GATE_DECISION=full).
+          # There a present-but-empty secret fails closed instead of running tier 3 inert
+          # (M-5). The 'degraded' path — fork PRs OR same-repo burn-in (require_denylist=
+          # false) — runs tiers 1+2 with tier 3 legitimately off, so it MUST NOT require it.
+          if [ "${GATE_DECISION:-}" = "full" ]; then
             ARGS+=(--require-denylist)
           fi
           if [ "$SCAN_MODE" = "diff" ]; then
