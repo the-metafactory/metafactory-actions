@@ -60,12 +60,17 @@ jobs:
     secrets:
       target_token: ${{ secrets.ECOSYSTEM_PAT }}
 
-  # RED proof: an unmodified, non-compliant manifest → fails (EXPECTED).
+  # RED proof: an unmodified, non-compliant PUBLIC manifest → fails (EXPECTED).
+  # metafactory-bundle-discord@main is a real, pre-migration arc/v1 manifest
+  # (plural authors:, network domain:, no description:, bare namespace:) — the
+  # gate rejects it, exactly as a non-compliant repo should be caught. (Public,
+  # so no token is needed; the plan's private plan-breakdown target is not
+  # reachable with the ECOSYSTEM_PAT available here.)
   proof-red:
     if: ${{ github.event_name == 'push' }}
     uses: ./.github/workflows/validate-manifest.yml
     with:
-      target_repo: the-metafactory/plan-breakdown
+      target_repo: the-metafactory/metafactory-bundle-discord
       target_ref: main
     secrets:
       target_token: ${{ secrets.ECOSYSTEM_PAT }}
