@@ -1,0 +1,23 @@
+# Proof fixture (temporary, issue #19). A minimal, fully arc/v1-compliant skill
+# manifest used by validate-manifest-proof.yml to prove the reusable workflow
+# passes (green) on a conforming repo — the counterpart to the red proof against
+# a non-compliant manifest. Not a real package; safe to remove with the harness.
+schema: arc/v1
+name: example
+namespace: "@metafactory"
+version: 0.1.0
+type: skill
+tier: custom
+description: Compliant arc/v1 manifest fixture — proves validate-manifest passes (green) on a conforming skill repo.
+license: MIT
+author:
+  name: Andreas
+  github: aastroem
+capabilities:
+  filesystem:
+    read: []
+    write: []
+  network: []
+  bash:
+    allowed: false
+  secrets: []
