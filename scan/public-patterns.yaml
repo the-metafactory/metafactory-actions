@@ -61,6 +61,14 @@ patterns:
   # lookarounds require the run to be a WHOLE digit run, so a 21+-digit number
   # matches nothing (it is not a snowflake — no sub-slice of a longer run is
   # flagged). Test files ARE in scope. All-zero / all-same-digit placeholders allowed.
+  #
+  # `suppress_in_hex` (#20): a digit run EMBEDDED in a ≥32-char hex token
+  # (git SHA-1 = 40, sha256 = 64) is digest content, not a snowflake — a
+  # 40-hex commit SHA contains a 17–20-digit decimal run by chance often
+  # enough to false-BLOCK innocent PRs (observed: cortex PR #2123). The
+  # engine extends the match through flanking hex chars and suppresses only
+  # when the maximal token reads as a digest; `guildId1234…` / `webhook_1234…`
+  # extend to sub-32-char tokens and stay CAUGHT (finding 4 preserved).
   - id: platform-snowflake
     class: platform-id-shape
     tier: 2
@@ -68,6 +76,7 @@ patterns:
     description: 17-20 digit platform ID (non-placeholder)
     regex: '(?<![0-9])\d{17,20}(?![0-9])'
     flags: g
+    suppress_in_hex: true
     allow:
       - '^0+$'
       - '^(\d)\1+$'

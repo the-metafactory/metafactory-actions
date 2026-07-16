@@ -46,6 +46,17 @@ export interface ShapePattern {
   paths: string[];
   /** Carve-out regexes — a match satisfying any of these is NOT flagged. */
   allow: RegExp[];
+  /**
+   * metafactory-actions#20 — when true, a match is suppressed if it is
+   * EMBEDDED in a longer hex token (see {@link isHexEmbedded}): extending the
+   * match through flanking `[0-9a-fA-F]` chars yields a token ≥32 chars that
+   * contains at least one hex letter. Commit SHAs (40 hex) and sha256 digests
+   * (64 hex) contain a 17–20-digit decimal run by chance often enough to
+   * false-BLOCK innocent PRs; a REAL pasted platform id is delimited, never
+   * hex-flanked into a digest-length token. Opt-in per rule so the carve-out
+   * can't silently weaken unrelated shapes.
+   */
+  suppressInHex: boolean;
 }
 
 /**
@@ -173,6 +184,7 @@ interface RawPattern {
   flags?: string;
   paths: string[];
   allow: string[];
+  suppress_in_hex?: string;
 }
 
 /**
@@ -223,6 +235,7 @@ export function parsePatternsYaml(text: string): ShapePattern[] {
       else if (key === "description") cur.description = unquoteScalar(val);
       else if (key === "regex") cur.regex = unquoteScalar(val);
       else if (key === "flags") cur.flags = unquoteScalar(val);
+      else if (key === "suppress_in_hex") cur.suppress_in_hex = unquoteScalar(val);
       else if (key === "id") cur.id = unquoteScalar(val);
     }
   }
@@ -250,6 +263,7 @@ export function parsePatternsYaml(text: string): ShapePattern[] {
       regex: new RegExp(r.regex, flags),
       paths: r.paths,
       allow: r.allow.map((a) => new RegExp(a, allowFlags)),
+      suppressInHex: r.suppress_in_hex === "true",
     } satisfies ShapePattern;
   });
 }
@@ -260,6 +274,31 @@ export function parsePatternsYaml(text: string): ShapePattern[] {
 
 function isAllowed(match: string, allow: RegExp[]): boolean {
   return allow.some((re) => re.test(match));
+}
+
+/**
+ * metafactory-actions#20 — is the match at [start, start+len) embedded in a
+ * longer hex token? Extends the match left/right through `[0-9a-fA-F]` and
+ * suppresses only when the maximal token is ≥{@link HEX_EMBED_MIN_LEN} chars
+ * AND contains a hex letter — i.e. it reads as a digest (git SHA-1 = 40,
+ * sha256 = 64, md5 = 32), not as an id glued to a word (`guildId1234…`
+ * extends to a ~20-char token → NOT suppressed, preserving the
+ * letter-adjacent catches of adversarial review #9 finding 4). A pure-digit
+ * long run never qualifies (no hex letter) — not that one can reach here:
+ * the snowflake rule's own digit lookarounds already refuse runs inside
+ * longer digit runs.
+ */
+export const HEX_EMBED_MIN_LEN = 32;
+
+const HEX_CHAR = /[0-9a-fA-F]/;
+
+export function isHexEmbedded(line: string, start: number, len: number): boolean {
+  let l = start;
+  while (l > 0 && HEX_CHAR.test(line[l - 1])) l--;
+  let r = start + len;
+  while (r < line.length && HEX_CHAR.test(line[r])) r++;
+  const token = line.slice(l, r);
+  return token.length >= HEX_EMBED_MIN_LEN && /[a-fA-F]/.test(token);
 }
 
 /**
@@ -300,6 +339,10 @@ export function scanLineForShapes(
     for (const m of line.matchAll(p.regex)) {
       const match = m[0];
       if (isAllowed(match, p.allow)) continue;
+      // #20 — hex-digest embedding carve-out (opt-in per rule).
+      if (p.suppressInHex && isHexEmbedded(line, m.index ?? 0, match.length)) {
+        continue;
+      }
       findings.push({
         tier: p.tier,
         ruleId: p.id,

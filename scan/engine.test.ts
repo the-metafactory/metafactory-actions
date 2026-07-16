@@ -16,6 +16,7 @@ import {
   redactPath,
   renderFinding,
   scanContentForDenylist,
+  isHexEmbedded,
   scanContentForShapes,
   scanLineForShapes,
   type Finding,
@@ -209,6 +210,53 @@ describe("platform-snowflake (class 8)", () => {
   test("NEGATIVE: 16-digit (too short) and 21-digit (too long) do not match", () => {
     expect(scanLineForShapes("id=1234567890123456", 1, "f.ts", [findPattern("platform-snowflake")]).findings).toHaveLength(0); // 16
     expect(scanLineForShapes("id=123456789012345678901", 1, "f.ts", [findPattern("platform-snowflake")]).findings).toHaveLength(0); // 21
+  });
+
+  // #20 — suppress_in_hex: digit runs embedded in digest-length hex tokens
+  // are NOT snowflakes. Synthetic 40-hex "SHA" with an 18-digit decimal run
+  // inside (the cortex PR #2123 incident class).
+  const HEX_SHA40 = "3f51af2d4c" + SNOWFLAKE_18 + "cec2cd23ad0f"; // 10+18+12 = 40 hex chars
+  const HEX_SHA64 = "ab12cd" + SNOWFLAKE_18 + "ef".repeat(20); // 6+18+40 = 64 hex chars
+
+  test("NEGATIVE (#20): digit run inside a 40-hex commit SHA is suppressed", () => {
+    const { findings } = scanLineForShapes(`commit ${HEX_SHA40} (HEAD)`, 1, "f.ts", [findPattern("platform-snowflake")]);
+    expect(findings).toHaveLength(0);
+  });
+  test("NEGATIVE (#20): digit run inside a 64-hex sha256 digest is suppressed", () => {
+    const { findings } = scanLineForShapes(`sha256:${HEX_SHA64}`, 1, "f.ts", [findPattern("platform-snowflake")]);
+    expect(findings).toHaveLength(0);
+  });
+  test("POSITIVE (#20): letter-adjacent ids stay CAUGHT (finding 4 preserved)", () => {
+    // `guildId…` / `webhook_…` extend to sub-32-char hex tokens → not suppressed.
+    expect(scanLineForShapes(`guildId${SNOWFLAKE_18}`, 1, "f.ts", [findPattern("platform-snowflake")]).findings).toHaveLength(1);
+    expect(scanLineForShapes(`webhook_${SNOWFLAKE_18}`, 1, "f.ts", [findPattern("platform-snowflake")]).findings).toHaveLength(1);
+  });
+  test("POSITIVE (#20): short hex flanking (sub-32 token) does NOT suppress", () => {
+    // 18 digits + 13 hex letters = 31-char token — one short of the digest floor.
+    const { findings } = scanLineForShapes(`x=abcdef${SNOWFLAKE_18}abcdefa;`, 1, "f.ts", [findPattern("platform-snowflake")]);
+    expect(findings).toHaveLength(1);
+  });
+  test("POSITIVE (#20): a bare snowflake on a hex-free line is still flagged", () => {
+    const { findings } = scanLineForShapes(`channel_id: ${SNOWFLAKE_18}`, 1, "f.ts", [findPattern("platform-snowflake")]);
+    expect(findings).toHaveLength(1);
+  });
+  test("isHexEmbedded unit: exact boundaries", () => {
+    // Token of exactly 32 with a letter → suppressed.
+    const line32 = "a".repeat(14) + SNOWFLAKE_18; // 14+18 = 32
+    expect(isHexEmbedded(line32, 14, 18)).toBe(true);
+    // Same shape at 31 → not.
+    const line31 = "a".repeat(13) + SNOWFLAKE_18;
+    expect(isHexEmbedded(line31, 13, 18)).toBe(false);
+    // Pure digits never qualify (no hex letter) even when long.
+    const digits40 = SNOWFLAKE_18 + SNOWFLAKE_18 + "1234";
+    expect(isHexEmbedded(digits40, 0, 18)).toBe(false);
+    // Non-hex neighbors terminate the token ('g' is not hex).
+    expect(isHexEmbedded("g" + SNOWFLAKE_18 + "g", 1, 18)).toBe(false);
+  });
+  test("suppress_in_hex is opt-in: parsed true only for platform-snowflake", () => {
+    expect(findPattern("platform-snowflake").suppressInHex).toBe(true);
+    expect(findPattern("compliance-code").suppressInHex).toBe(false);
+    expect(findPattern("seed-identity").suppressInHex).toBe(false);
   });
 });
 
