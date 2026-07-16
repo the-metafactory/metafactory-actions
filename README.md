@@ -280,3 +280,44 @@ required check:
   input — so a caller can only pin a metafactory-actions SHA, not redirect the checkout.
   A movable tag or floating `main` can no longer select the engine; the gate fails
   closed if `engine_sha` is not a 40-hex commit and no valid fallback exists.
+
+## validate-manifest — caller usage
+
+The **reusable workflow** [`validate-manifest.yml`](.github/workflows/validate-manifest.yml)
+(skill-estate migration WS2, [arc#316](https://github.com/the-metafactory/arc/issues/316))
+is the shared CI floor for skill repos: it installs a pinned
+[arc](https://github.com/the-metafactory/arc) and runs `arc validate` over the
+repo's `arc-manifest.yaml`. A clean manifest passes; any strict `arc/v1`
+contract violation fails the check, one line per violation.
+
+Drop this into each skill repo. It validates the repo's own manifest at the
+pushed commit — no inputs required. **Pin by 40-hex commit SHA** (a branch/tag ref
+is movable):
+
+```yaml
+# .github/workflows/validate-manifest.yml
+name: validate-manifest
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  validate:
+    uses: the-metafactory/metafactory-actions/.github/workflows/validate-manifest.yml@<PIN-40-HEX-SHA>
+```
+
+Then add the observed `validate-manifest` check to the repo's **required status
+checks**.
+
+Notes:
+
+- **arc is pinned inside the reusable** to the commit that introduced `arc
+  validate` (not yet in an arc release tag). Re-pin the `arc_ref` default to the
+  first arc release tag that carries `arc validate` when one ships.
+- The manifest is read from the repo root by default; set `manifest_path` on the
+  `with:` if the manifest lives in a subdirectory.
+- To validate a **different** repo (e.g. a driver/proof run), pass `target_repo`
+  and `target_ref`; for a **private** target, also pass a `target_token` secret
+  with read access to it. Self-validation and public targets need neither — the
+  job's `GITHUB_TOKEN` covers them.
+

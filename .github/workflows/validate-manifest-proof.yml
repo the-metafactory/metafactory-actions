@@ -1,0 +1,40 @@
+# TEST HARNESS (temporary, arc#316 / issue #19).
+#
+# Manual driver that proves the reusable validate-manifest workflow behaves:
+# green on a compliant arc/v1 manifest, red on a non-compliant one. It calls the
+# reusable with a target_repo/target_ref input so a run can point at ANY repo
+# without adding a workflow there. Passes ECOSYSTEM_PAT as target_token so a
+# PRIVATE target can be checked out.
+#
+# This exists only to capture the acceptance-criteria proof runs. It is safe to
+# delete once those runs are linked in the PR/issue; kept in-tree so the proof is
+# reproducible on demand.
+name: validate-manifest-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "owner/repo to validate"
+        type: string
+        required: true
+      target_ref:
+        description: "ref (branch/tag/sha) of target_repo"
+        type: string
+        required: false
+        default: "main"
+      manifest_path:
+        description: "manifest dir relative to target repo root"
+        type: string
+        required: false
+        default: "."
+
+jobs:
+  proof:
+    uses: ./.github/workflows/validate-manifest.yml
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      target_ref: ${{ inputs.target_ref }}
+      manifest_path: ${{ inputs.manifest_path }}
+    secrets:
+      target_token: ${{ secrets.ECOSYSTEM_PAT }}

@@ -1,0 +1,139 @@
+# Reusable arc/v1 manifest validation gate (skill-estate migration WS2, arc#316).
+# Every skill repo calls this as its CI floor: it checks out the repo, installs a
+# PINNED arc, and runs `arc validate` over the repo's arc-manifest.yaml. A clean
+# manifest exits 0 (green); any strict-contract violation exits 1 (red), one line
+# per violation. Read-only — it never mutates the target tree, and `arc validate`
+# does not change how `arc install` parses manifests (the loader stays lenient).
+#
+# By default the gate validates the CALLER'S OWN repo at the triggering ref
+# (target_repo / target_ref default to github.repository / github.sha), so an
+# adopting skill repo just calls it on push/PR with no inputs. The optional
+# target_repo / target_ref / target_token inputs let a driver validate ANOTHER
+# repo (used by the proof harness) without adding a workflow to it.
+#
+# Caller usage: see README "validate-manifest — caller usage".
+name: validate-manifest
+
+on:
+  workflow_call:
+    inputs:
+      target_repo:
+        description: >-
+          owner/repo to validate. Defaults to the caller's own repo
+          (github.repository) — the CI-floor case. Override only to validate a
+          different repo (e.g. a proof/driver run).
+        type: string
+        required: false
+        default: ${{ github.repository }}
+      target_ref:
+        description: >-
+          Ref (branch, tag, or 40-hex SHA) of target_repo to check out. Defaults
+          to the triggering commit (github.sha) so a repo validates exactly what
+          it is pushing.
+        type: string
+        required: false
+        default: ${{ github.sha }}
+      manifest_path:
+        description: >-
+          Directory (relative to the target repo root) that holds the
+          arc-manifest.yaml to validate. Defaults to the repo root.
+        type: string
+        required: false
+        default: "."
+      arc_ref:
+        description: >-
+          Ref of the-metafactory/arc to install the validator from. Pinned by
+          default to an IMMUTABLE commit SHA (see the default below). `arc
+          validate` shipped after the last arc release, so this is pinned to the
+          merge commit rather than a tag — RE-PIN TO THE NEXT ARC RELEASE TAG
+          once one includes `arc validate`.
+        type: string
+        required: false
+        # arc#317 (`arc validate`) merged to the-metafactory/arc main on
+        # 2026-07-17 and is not in any release tag yet. Pin to the merge commit
+        # for immutability; re-pin to the first release tag that carries it.
+        default: "bd5792ed66d4eb126cc4d070724e2916083d600e"
+    secrets:
+      target_token:
+        description: >-
+          Token used to check out target_repo. Optional — falls back to the
+          job's GITHUB_TOKEN, which already covers a repo validating itself and
+          any public target. Required only to validate a PRIVATE repo other than
+          the caller (e.g. a proof run against a private skill repo); pass a PAT
+          / app token with read access to it.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      # Derive the target's short repo name (owner/repo → repo). The checkout dir
+      # MUST be named after the repo, not a fixed 'src': `arc validate` derives the
+      # expected package name from the checkout DIRECTORY name (spec §4.2, e.g.
+      # metafactory-bundle-discord → 'discord'). A generic path would silently
+      # disable that name-vs-repo-directory rule.
+      - name: Resolve target repo name
+        id: meta
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          NAME="${TARGET_REPO##*/}"
+          if [ -z "$NAME" ]; then
+            echo "::error::validate-manifest: could not derive a repo name from target_repo='${TARGET_REPO}'"
+            exit 1
+          fi
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      # Check out the repo under test into a dir named after it (so §4.2 name
+      # derivation works) — and separate from the pinned arc checkout below. token
+      # falls back to GITHUB_TOKEN when no target_token secret is passed
+      # (self-validation and public targets).
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ inputs.target_ref }}
+          token: ${{ secrets.target_token || github.token }}
+          path: ${{ steps.meta.outputs.name }}
+          persist-credentials: false
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # Pin the VALIDATOR to an immutable arc commit SHA (arc_ref default). The
+      # repository is hardcoded — a caller can only choose which arc SHA/tag to
+      # install, never redirect the checkout elsewhere. arc is public, so the
+      # job's GITHUB_TOKEN suffices.
+      - name: Checkout arc (validator, pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: the-metafactory/arc
+          ref: ${{ inputs.arc_ref }}
+          path: _arc
+          persist-credentials: false
+
+      - name: Install arc
+        working-directory: _arc
+        run: bun install
+
+      # Run the validator from the TRUSTED arc clone (its own pinned tree) and
+      # point it at the target by ABSOLUTE path. bun auto-loads bunfig.toml (and
+      # its `preload` ⇒ code execution) from its process CWD; keeping CWD inside
+      # the pinned arc checkout — never the target tree — means a bunfig.toml
+      # planted in the target repo cannot run code in this job. `arc validate`
+      # only READS the target's manifest/SKILL.md as data. Exit 1 (any violation)
+      # fails the step and the gate; exit 0 passes.
+      - name: Validate manifest (arc validate)
+        working-directory: _arc
+        env:
+          MANIFEST_DIR: ${{ github.workspace }}/${{ steps.meta.outputs.name }}/${{ inputs.manifest_path }}
+        run: |
+          set -euo pipefail
+          echo "::notice::validate-manifest: arc validate ${{ inputs.target_repo }}@${{ inputs.target_ref }} (path: ${{ inputs.manifest_path }})"
+          bun src/cli.ts validate "$MANIFEST_DIR"
