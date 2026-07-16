@@ -1,0 +1,76 @@
+# TEST HARNESS (temporary, arc#316 / issue #19).
+#
+# Proves the reusable validate-manifest workflow behaves: GREEN on a compliant
+# arc/v1 manifest, RED on a non-compliant one.
+#
+#   * workflow_dispatch — validate an ARBITRARY target repo (owner/repo + ref).
+#     NOTE: workflow_dispatch only runs from the DEFAULT branch, so it captures
+#     nothing while this lives on a feature branch — it is here as the documented
+#     manual driver for after merge.
+#   * push (this feature branch) — runs the two acceptance proofs so their runs
+#     can be captured without merging: proof-green (a compliant in-repo fixture)
+#     and proof-red (a non-compliant real manifest). proof-red is EXPECTED TO
+#     FAIL — its failure IS the proof — so this workflow's overall run shows
+#     failed by design.
+#
+# ECOSYSTEM_PAT is passed as target_token so a PRIVATE target can be checked out.
+# Safe to delete (with the proof fixture) once the runs are linked in the PR.
+name: validate-manifest-proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: "owner/repo to validate"
+        type: string
+        required: true
+      target_ref:
+        description: "ref (branch/tag/sha) of target_repo"
+        type: string
+        required: false
+        default: "main"
+      manifest_path:
+        description: "manifest dir relative to target repo root"
+        type: string
+        required: false
+        default: "."
+  push:
+    branches: [feat/19-validate-manifest-workflow]
+
+jobs:
+  # Manual arbitrary-target run (default branch only).
+  dispatch:
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    uses: ./.github/workflows/validate-manifest.yml
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      target_ref: ${{ inputs.target_ref }}
+      manifest_path: ${{ inputs.manifest_path }}
+    secrets:
+      target_token: ${{ secrets.ECOSYSTEM_PAT }}
+
+  # GREEN proof: a fully compliant arc/v1 manifest fixture in THIS repo → passes.
+  proof-green:
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/validate-manifest.yml
+    with:
+      target_repo: ${{ github.repository }}
+      target_ref: ${{ github.sha }}
+      manifest_path: .github/proof-fixtures/metafactory-skill-example
+    secrets:
+      target_token: ${{ secrets.ECOSYSTEM_PAT }}
+
+  # RED proof: an unmodified, non-compliant PUBLIC manifest → fails (EXPECTED).
+  # metafactory-bundle-discord@main is a real, pre-migration arc/v1 manifest
+  # (plural authors:, network domain:, no description:, bare namespace:) — the
+  # gate rejects it, exactly as a non-compliant repo should be caught. (Public,
+  # so no token is needed; the plan's private plan-breakdown target is not
+  # reachable with the ECOSYSTEM_PAT available here.)
+  proof-red:
+    if: ${{ github.event_name == 'push' }}
+    uses: ./.github/workflows/validate-manifest.yml
+    with:
+      target_repo: the-metafactory/metafactory-bundle-discord
+      target_ref: main
+    secrets:
+      target_token: ${{ secrets.ECOSYSTEM_PAT }}
