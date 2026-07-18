@@ -7,8 +7,22 @@
 #
 # Alert channels:
 #   - PRIVATE Discord webhook (org secret) — may carry actor + type + SHA + branch.
+#     EVERY detected bypass goes here, including zero-approval-merge.
 #   - PUBLIC issue in the caller repo — actor + type ONLY, deliberately SHA-FREE
 #     (a public before-SHA is a retrieval handle to scrubbed content). Title only.
+#     Filed ONLY for forced-push / direct-push (see below).
+#
+# Why zero-approval-merge does NOT file a public issue (cortex#1941):
+#   In a single-maintainer repo the author identity cannot self-approve, so EVERY
+#   merge is a zero-approval merge. On cortex that produced 254 alerts in 3 weeks
+#   against 7 genuine direct-pushes — a ~5% signal rate that trained the operator
+#   to ignore the whole class (alert fatigue). Detection is unchanged and the
+#   private ops channel still receives every one; only the public issue — the
+#   channel that generates inbox notifications and a growing issue backlog — is
+#   restricted to the classes that are actually anomalous.
+#   NOTE: this makes zero-approval-merge a Discord-only signal. A repo that HAS
+#   real multi-party review (where zero-approval is genuinely exceptional) loses
+#   its durable public record of it; revisit if such a caller appears.
 #
 # A normal squash merge with ≥1 approval is SILENT.
 name: confidentiality-push-alert
@@ -41,7 +55,13 @@ jobs:
         run: |
           set -euo pipefail
           BYPASS=""
-          [ "${FORCED}" = "true" ] && BYPASS="forced-push"
+          # PUBLIC is the issue-worthy subset of BYPASS: the classes that are
+          # genuinely anomalous rather than a structural property of the repo.
+          PUBLIC=""
+          if [ "${FORCED}" = "true" ]; then
+            BYPASS="forced-push"
+            PUBLIC="forced-push"
+          fi
 
           PRJSON="$(gh api "repos/${REPO}/commits/${SHA}/pulls" -H "Accept: application/vnd.github+json" 2>/dev/null || echo '[]')"
           # A legitimate reviewed merge is one where a MERGED PR's merge_commit_sha
@@ -55,6 +75,7 @@ jobs:
             # with some (possibly attacker-created) open PR — that association was the
             # M-6 evasion (pre-open a throwaway PR containing the SHA to go silent).
             BYPASS="${BYPASS:+$BYPASS,}direct-push"
+            PUBLIC="${PUBLIC:+$PUBLIC,}direct-push"
           else
             # Count ONLY approvals from reviewers with write+ (author_association in
             # OWNER/MEMBER/COLLABORATOR). A drive-by APPROVE from a no-write account
@@ -62,15 +83,20 @@ jobs:
             APPROVALS="$(gh api "repos/${REPO}/pulls/${PRNUM}/reviews" --paginate 2>/dev/null \
               | jq '[.[] | select(.state=="APPROVED") | select(.author_association=="OWNER" or .author_association=="MEMBER" or .author_association=="COLLABORATOR")] | length' 2>/dev/null || echo 0)"
             if [ "${APPROVALS:-0}" -eq 0 ]; then
+              # Detected + sent to the private ops channel, but deliberately NOT
+              # added to PUBLIC — see the header note (cortex#1941 alert fatigue).
               BYPASS="${BYPASS:+$BYPASS,}zero-approval-merge(PR#${PRNUM})"
             fi
           fi
 
+          echo "bypass=$BYPASS" >> "$GITHUB_OUTPUT"
+          echo "public_bypass=$PUBLIC" >> "$GITHUB_OUTPUT"
           if [ -n "$BYPASS" ]; then
-            echo "bypass=$BYPASS" >> "$GITHUB_OUTPUT"
             echo "::warning::merge-bypass detected on default branch: $BYPASS"
+            if [ -z "$PUBLIC" ]; then
+              echo "::notice::private ops alert only — no issue-worthy class in: $BYPASS"
+            fi
           else
-            echo "bypass=" >> "$GITHUB_OUTPUT"
             echo "::notice::no merge-bypass — normal reviewed merge (silent)"
           fi
 
@@ -95,17 +121,21 @@ jobs:
             && echo "posted private ops alert" || echo "::warning::failed to post Discord alert"
 
       - name: Public SHA-free issue (caller repo)
-        if: ${{ steps.detect.outputs.bypass != '' }}
+        # Only the issue-worthy subset. zero-approval-merge alone stays Discord-only.
+        if: ${{ steps.detect.outputs.public_bypass != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           ACTOR: ${{ github.actor }}
           BRANCH: ${{ github.ref_name }}
-          BYPASS: ${{ steps.detect.outputs.bypass }}
+          BYPASS: ${{ steps.detect.outputs.public_bypass }}
         run: |
           set -euo pipefail
           TITLE="Merge-bypass alert: ${BYPASS} on ${BRANCH} by ${ACTOR}"
           # De-dupe: skip if an open issue with this exact title already exists.
+          # This only works because PUBLIC carries no per-merge identifier. The old
+          # title embedded `PR#<n>` from zero-approval-merge, making every title
+          # unique and this check permanently dead (cortex#1941).
           EXISTING="$(gh issue list --repo "$REPO" --state open --json title -q "[.[] | select(.title == \"$TITLE\")] | length" 2>/dev/null || echo 0)"
           if [ "${EXISTING:-0}" != "0" ]; then
             echo "open bypass-alert issue already exists — not duplicating"
