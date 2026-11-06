@@ -1,15 +1,54 @@
 {
   "name": "A_FETCH_FEED",
-  "version": "1.0.0",
-  "description": "Fetch and parse an RSS or Atom feed into items, newest first as the feed lists them. Each item has its title, link, description (up to 500 characters) and pubDate.",
+  "version": "1.1.0",
+  "description": "Fetch and parse an RSS or Atom feed into items, newest first as the feed lists them. Each item has its title, link, description (up to 500 characters) and pubDate. With window: yesterday, code keeps only the items dated yesterday in the run's time zone, so no model has to select by date.",
   "input": {
-    "feedUrl": { "type": "string", "required": true },
-    "limit": { "type": "number", "description": "Most items to return. Only 5 when left out, so set it: a busy news feed publishes over 100 items a day." }
+    "feedUrl": {
+      "type": "string",
+      "required": true
+    },
+    "limit": {
+      "type": "number",
+      "description": "Most items to return. Only 5 when left out, so set it: a busy news feed publishes over 100 items a day. With a window it counts only that day's items."
+    },
+    "window": {
+      "type": "string",
+      "enum": [
+        "yesterday"
+      ],
+      "description": "Keep only the items dated this relative day, read when the run starts. Set it under the top-level input: map for any request about yesterday's items. Follow the summary with A_WINDOW_NOTICE."
+    }
   },
   "output": {
-    "items": { "type": "array" },
-    "feedTitle": { "type": "string" }
+    "items": {
+      "type": "array"
+    },
+    "feedTitle": {
+      "type": "string"
+    },
+    "windowDay": {
+      "type": "string",
+      "description": "With a window: the day it kept, YYYY-MM-DD"
+    },
+    "windowZone": {
+      "type": "string",
+      "description": "With a window: the time zone that day was read in"
+    },
+    "windowPartial": {
+      "type": "boolean",
+      "description": "With a window: true when the feed may not hold the whole day"
+    },
+    "windowNote": {
+      "type": "string",
+      "description": "With a window: what is missing from the day, or empty when nothing is. Read it with A_WINDOW_NOTICE."
+    }
   },
-  "requires": ["fetch"],
-  "tags": ["rss", "feed", "fetch"]
+  "requires": [
+    "fetch"
+  ],
+  "tags": [
+    "rss",
+    "feed",
+    "fetch"
+  ]
 }

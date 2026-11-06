@@ -3,6 +3,7 @@ import type { ActionContext } from "../../types";
 interface Input {
   feedUrl: string;
   limit?: number;
+  window?: string;
   [key: string]: unknown;
 }
 
@@ -13,9 +14,83 @@ interface FeedItem {
   pubDate?: string;
 }
 
+const WINDOW_YESTERDAY = "yesterday";
+const TIME_WITH_A_ZONE = /\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2}|UTC?|GMT|[ECMP][SD]T)\s*$/;
+
+const leftOut = (count: number, what: string): string => `${count} article${count === 1 ? "" : "s"} ${what} ${count === 1 ? "was" : "were"} left out.`;
+
+function localParts(at: Date, timeZone: string): Record<string, string> {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(at);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+function localDay(at: Date, timeZone: string): string {
+  const { year, month, day } = localParts(at, timeZone);
+  return `${year}-${month}-${day}`;
+}
+
+function localMinute(at: Date, timeZone: string): string {
+  const { hour, minute } = localParts(at, timeZone);
+  return `${localDay(at, timeZone)} ${hour}:${minute}`;
+}
+
+function dayBefore(day: string): string {
+  const [year, month, date] = day.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(year, month - 1, date - 1)).toISOString().slice(0, 10);
+}
+
+/** A date with no zone names no single day in the run's zone, so it counts as unreadable rather than as a guess. */
+function readInstant(pubDate: string | undefined): Date | null {
+  if (!pubDate || !TIME_WITH_A_ZONE.test(pubDate)) return null;
+  const at = new Date(pubDate);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
+/**
+ * Selects by each item's own local day, so a short or long day needs no boundary arithmetic.
+ * An item with no readable date is left out and counted: the list must hold only what is known to be from that day, and the note says what is missing.
+ */
+function selectYesterday(all: FeedItem[], untitled: (string | undefined)[], limit: number, ctx: ActionContext) {
+  const startedAt = ctx.run?.startedAt ?? new Date();
+  const windowZone = ctx.run?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const windowDay = dayBefore(localDay(startedAt, windowZone));
+
+  const dated = all.flatMap((item) => {
+    const at = readInstant(item.pubDate);
+    return at ? [{ item, at, day: localDay(at, windowZone) }] : [];
+  });
+  const inDay = dated.filter((entry) => entry.day === windowDay).map((entry) => entry.item);
+  const undated = all.length - dated.length;
+  const oldest = dated.reduce<Date | null>((soFar, entry) => (soFar && soFar <= entry.at ? soFar : entry.at), null);
+
+  const notes: string[] = [];
+  if (!oldest) notes.push(`The feed holds no article with a readable date, so it cannot show what was published on ${windowDay}.`);
+  else if (!dated.some((entry) => entry.day < windowDay)) notes.push(`The feed reaches back only to ${localMinute(oldest, windowZone)}, so ${windowDay} may be incomplete.`);
+  if (inDay.length > limit) notes.push(`Only the first ${limit} of ${inDay.length} articles from ${windowDay} are included.`);
+  if (undated > 0 && oldest) notes.push(leftOut(undated, "without a readable date"));
+  const untitledInDay = untitled.filter((pubDate) => {
+    const at = readInstant(pubDate);
+    return at && localDay(at, windowZone) === windowDay;
+  }).length;
+  if (untitledInDay > 0) notes.push(leftOut(untitledInDay, `from ${windowDay} without a title`));
+
+  return {
+    items: inDay.slice(0, limit),
+    windowDay,
+    windowZone,
+    windowPartial: notes.length > 0,
+    windowNote: notes.join(" "),
+  };
+}
+
 export default {
   async execute(input: Input, ctx: ActionContext) {
     const { feedUrl, limit = 5, ...upstream } = input;
+    if (input.window !== undefined && input.window !== WINDOW_YESTERDAY) {
+      throw new Error(`A_FETCH_FEED: window must be "${WINDOW_YESTERDAY}", got "${input.window}"`);
+    }
 
     const fetchFn = ctx.capabilities.fetch!;
     const response = await fetchFn(feedUrl, {
@@ -30,10 +105,11 @@ export default {
 
     // Simple XML parsing — extract <item> or <entry> elements
     const items: FeedItem[] = [];
+    const untitled: (string | undefined)[] = [];
     const itemRegex = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
     let match;
 
-    while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
+    while ((match = itemRegex.exec(xml)) !== null) {
       const block = match[1] || match[2];
       const title = block.match(/<title[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/title>/)?.[1]?.trim() || "";
       const link = block.match(/<link[^>]*>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?<\/link>/)?.[1]?.trim()
@@ -50,6 +126,8 @@ export default {
           description: desc.replace(/<[^>]*>/g, "").slice(0, 500),
           pubDate,
         });
+      } else {
+        untitled.push(pubDate);
       }
     }
 
@@ -60,7 +138,7 @@ export default {
       ...upstream,
       feedUrl,
       feedTitle,
-      items,
+      ...(input.window ? selectYesterday(items, untitled, limit, ctx) : { items: items.slice(0, limit) }),
       fetchedAt: new Date().toISOString(),
     };
   },
