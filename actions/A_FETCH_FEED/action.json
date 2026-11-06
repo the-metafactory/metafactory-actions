@@ -1,7 +1,7 @@
 {
   "name": "A_FETCH_FEED",
   "version": "1.0.0",
-  "description": "Fetch and parse an RSS or Atom feed into items, newest first as the feed lists them. Each item has its title, link, description (up to 500 characters) and pubDate, which is enough to summarize many articles.",
+  "description": "Fetch and parse an RSS or Atom feed into items, newest first as the feed lists them. Each item has its title, link, description (up to 500 characters) and pubDate.",
   "input": {
     "feedUrl": { "type": "string", "required": true },
     "limit": { "type": "number", "description": "Most items to return. Only 5 when left out, so set it: a busy news feed publishes over 100 items a day." }
