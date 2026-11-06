@@ -102,6 +102,34 @@ describe("A_FETCH_FEED window: yesterday", () => {
     expect(out.windowNote).toContain("2 articles without a readable date");
   });
 
+  test("one undated item reads as one", async () => {
+    const out = await fetchWindow(feedOf(entry("no-date"), entry("older", "2026-11-04T12:00:00+01:00")), "2026-11-06T08:00:00+01:00");
+    expect(out.windowNote).toBe("1 article without a readable date was left out.");
+  });
+
+  test("a date with no zone is not guessed into a day, in any spelling", async () => {
+    const out = await fetchWindow(
+      feedOf(entry("date-only", "2026-11-05"), entry("zoneless", "2026-11-05T12:00:00"), entry("with-zone", "2026-11-05T12:00:00+01:00"), entry("older", "2026-11-04T12:00:00+01:00")),
+      "2026-11-06T08:00:00+01:00",
+      {},
+      "America/Los_Angeles",
+    );
+    expect(titles(out)).toEqual(["older"]);
+    expect(out.windowNote).toContain("2 articles without a readable date");
+    const zurich = await fetchWindow(feedOf(entry("date-only", "2026-11-05"), entry("with-zone", "2026-11-05T12:00:00+01:00"), entry("older", "2026-11-04T12:00:00+01:00")), "2026-11-06T08:00:00+01:00");
+    expect(titles(zurich)).toEqual(["with-zone"]);
+  });
+
+  test("an item from the day with no title is reported, not silently lost", async () => {
+    const out = await fetchWindow(
+      feedOf(entry("titled", "2026-11-05T12:00:00+01:00"), `<entry><published>2026-11-05T13:00:00+01:00</published></entry>`, `<entry><published>2026-11-03T13:00:00+01:00</published></entry>`, entry("older", "2026-11-04T12:00:00+01:00")),
+      "2026-11-06T08:00:00+01:00",
+    );
+    expect(titles(out)).toEqual(["titled"]);
+    expect(out.windowPartial).toBe(true);
+    expect(out.windowNote).toBe("1 article from 2026-11-05 without a title was left out.");
+  });
+
   test("a feed that does not reach back past the day says the day may be partial", async () => {
     const out = await fetchWindow(
       feedOf(entry("today", "2026-11-06T07:00:00+01:00"), entry("yesterday-evening", "2026-11-05T20:00:00+01:00")),

@@ -15,6 +15,9 @@ interface FeedItem {
 }
 
 const WINDOW_YESTERDAY = "yesterday";
+const ENDS_IN_A_ZONE = /(?:Z|[+-]\d{2}:?\d{2}|\b[A-Z]{2,4})\s*$/;
+
+const countOf = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 function localParts(at: Date, timeZone: string): Record<string, string> {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -38,8 +41,9 @@ function dayBefore(day: string): string {
   return new Date(Date.UTC(year, month - 1, date - 1)).toISOString().slice(0, 10);
 }
 
+/** A date with no zone names no single day in the run's zone, so it counts as unreadable rather than as a guess. */
 function readInstant(pubDate: string | undefined): Date | null {
-  if (!pubDate) return null;
+  if (!pubDate || !ENDS_IN_A_ZONE.test(pubDate)) return null;
   const at = new Date(pubDate);
   return Number.isNaN(at.getTime()) ? null : at;
 }
@@ -48,7 +52,7 @@ function readInstant(pubDate: string | undefined): Date | null {
  * Selects by each item's own local day, so a short or long day needs no boundary arithmetic.
  * An item with no readable date is left out and counted: the list must hold only what is known to be from that day, and the note says what is missing.
  */
-function selectYesterday(all: FeedItem[], limit: number, ctx: ActionContext) {
+function selectYesterday(all: FeedItem[], untitled: (string | undefined)[], limit: number, ctx: ActionContext) {
   const startedAt = ctx.run?.startedAt ?? new Date();
   const windowZone = ctx.run?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const windowDay = dayBefore(localDay(startedAt, windowZone));
@@ -65,7 +69,12 @@ function selectYesterday(all: FeedItem[], limit: number, ctx: ActionContext) {
   if (!oldest) notes.push(`The feed holds no article with a readable date, so it cannot show what was published on ${windowDay}.`);
   else if (!dated.some((entry) => entry.day < windowDay)) notes.push(`The feed reaches back only to ${localMinute(oldest, windowZone)}, so ${windowDay} may be incomplete.`);
   if (inDay.length > limit) notes.push(`Only the first ${limit} of ${inDay.length} articles from ${windowDay} are included.`);
-  if (undated > 0 && oldest) notes.push(`${undated} articles without a readable date were left out.`);
+  if (undated > 0 && oldest) notes.push(`${countOf(undated, "article")} without a readable date ${undated === 1 ? "was" : "were"} left out.`);
+  const untitledInDay = untitled.filter((pubDate) => {
+    const at = readInstant(pubDate);
+    return at && localDay(at, windowZone) === windowDay;
+  }).length;
+  if (untitledInDay > 0) notes.push(`${countOf(untitledInDay, "article")} from ${windowDay} without a title ${untitledInDay === 1 ? "was" : "were"} left out.`);
 
   return {
     items: inDay.slice(0, limit),
@@ -96,6 +105,7 @@ export default {
 
     // Simple XML parsing — extract <item> or <entry> elements
     const items: FeedItem[] = [];
+    const untitled: (string | undefined)[] = [];
     const itemRegex = /<item[^>]*>([\s\S]*?)<\/item>|<entry[^>]*>([\s\S]*?)<\/entry>/gi;
     let match;
 
@@ -118,6 +128,8 @@ export default {
           description: desc.replace(/<[^>]*>/g, "").slice(0, 500),
           pubDate,
         });
+      } else {
+        untitled.push(pubDate);
       }
     }
 
@@ -128,7 +140,7 @@ export default {
       ...upstream,
       feedUrl,
       feedTitle,
-      ...(input.window ? selectYesterday(items, limit, ctx) : { items: items.slice(0, limit) }),
+      ...(input.window ? selectYesterday(items, untitled, limit, ctx) : { items: items.slice(0, limit) }),
       fetchedAt: new Date().toISOString(),
     };
   },
