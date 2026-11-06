@@ -1,7 +1,7 @@
 {
   "name": "A_EXTRACT_ARTICLE",
   "version": "1.0.0",
-  "description": "Extract article content from feed items by fetching linked pages",
+  "description": "Fetch the full text of the FIRST 3 feed items only, and drop the rest. Use it to read a few articles in depth. To summarize more than 3 articles, read the feed's items directly instead.",
   "input": {
     "items": { "type": "array", "required": true }
   },
