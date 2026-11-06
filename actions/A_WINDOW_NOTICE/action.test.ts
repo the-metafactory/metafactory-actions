@@ -8,12 +8,12 @@ const window = { windowDay: "2026-11-05", windowZone: "Europe/Zurich", windowNot
 describe("A_WINDOW_NOTICE", () => {
   test("an empty window drops whatever the model wrote", async () => {
     const out = await action.execute({ ...window, items: [], body: "- Invented article" }, context);
-    expect(out.body).toBe("No articles from 2026-11-05 (Europe/Zurich).\n");
+    expect(out.body).toBe("No articles found for 2026-11-05 (Europe/Zurich).\n");
   });
 
   test("an empty window still says why it may be empty", async () => {
     const out = await action.execute({ ...window, items: [], body: "x", windowNote: "The feed reaches back only to 2026-11-06 07:00." }, context);
-    expect(out.body).toBe("No articles from 2026-11-05 (Europe/Zurich).\nThe feed reaches back only to 2026-11-06 07:00.\n");
+    expect(out.body).toBe("No articles found for 2026-11-05 (Europe/Zurich).\nThe feed reaches back only to 2026-11-06 07:00.\n");
   });
 
   test("a whole day leads with its date and count", async () => {

@@ -183,10 +183,10 @@ describe("A_FETCH_FEED window: yesterday", () => {
 
   test("a time with AM or PM and a date with dashes are not zones", async () => {
     const out = await fetchWindow(
-      feedOf(entry("meridiem", "Nov 5, 2026 11:30 PM"), entry("dashes", "11-05-2026"), entry("rfc822-zone", "Thu, 05 Nov 2026 12:00:00 EST"), entry("older", "2026-11-04T12:00:00+01:00")),
+      feedOf(entry("meridiem", "Nov 5, 2026 11:30 PM"), entry("dashes", "11-05-2026"), entry("rfc822-zone", "Thu, 05 Nov 2026 12:00:00 EST"), entry("utc-suffix", "Thu, 05 Nov 2026 13:00:00 UTC"), entry("older", "2026-11-04T12:00:00+01:00")),
       "2026-11-06T08:00:00+01:00",
     );
-    expect(titles(out)).toEqual(["rfc822-zone"]);
+    expect(titles(out)).toEqual(["rfc822-zone", "utc-suffix"]);
     expect(out.windowNote).toContain("2 articles without a readable date");
   });
 

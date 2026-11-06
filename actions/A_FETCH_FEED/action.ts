@@ -15,7 +15,7 @@ interface FeedItem {
 }
 
 const WINDOW_YESTERDAY = "yesterday";
-const TIME_WITH_A_ZONE = /\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2}|UT|GMT|[ECMP][SD]T)\s*$/;
+const TIME_WITH_A_ZONE = /\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2}|UTC?|GMT|[ECMP][SD]T)\s*$/;
 
 const leftOut = (count: number, what: string): string => `${count} article${count === 1 ? "" : "s"} ${what} ${count === 1 ? "was" : "were"} left out.`;
 
