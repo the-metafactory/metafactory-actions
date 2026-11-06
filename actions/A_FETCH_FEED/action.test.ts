@@ -171,12 +171,23 @@ describe("A_FETCH_FEED window: yesterday", () => {
     expect(out.windowNote).toContain("no article with a readable date");
   });
 
-  test("an Atom entry with only the required updated date is dated by it", async () => {
+  test("a modification date is not a publication date", async () => {
     const xml = feedOf(
-      `<entry><title>only-updated</title><updated>2026-11-05T12:00:00+01:00</updated></entry>`,
+      `<entry><title>edited-yesterday</title><updated>2026-11-05T12:00:00+01:00</updated></entry>`,
       entry("older", "2026-11-04T12:00:00+01:00"),
     );
-    expect(titles(await fetchWindow(xml, "2026-11-06T08:00:00+01:00"))).toEqual(["only-updated"]);
+    const out = await fetchWindow(xml, "2026-11-06T08:00:00+01:00");
+    expect(titles(out)).toEqual([]);
+    expect(out.windowNote).toContain("1 article without a readable date");
+  });
+
+  test("a time with AM or PM and a date with dashes are not zones", async () => {
+    const out = await fetchWindow(
+      feedOf(entry("meridiem", "Nov 5, 2026 11:30 PM"), entry("dashes", "11-05-2026"), entry("rfc822-zone", "Thu, 05 Nov 2026 12:00:00 EST"), entry("older", "2026-11-04T12:00:00+01:00")),
+      "2026-11-06T08:00:00+01:00",
+    );
+    expect(titles(out)).toEqual(["rfc822-zone"]);
+    expect(out.windowNote).toContain("2 articles without a readable date");
   });
 
   test("without a clock from the run it reads the host's clock and zone", async () => {

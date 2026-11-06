@@ -15,9 +15,9 @@ interface FeedItem {
 }
 
 const WINDOW_YESTERDAY = "yesterday";
-const ENDS_IN_A_ZONE = /(?:Z|[+-]\d{2}:?\d{2}|\b[A-Z]{2,4})\s*$/;
+const TIME_WITH_A_ZONE = /\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2}|UT|GMT|[ECMP][SD]T)\s*$/;
 
-const countOf = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
+const leftOut = (count: number, what: string): string => `${count} article${count === 1 ? "" : "s"} ${what} ${count === 1 ? "was" : "were"} left out.`;
 
 function localParts(at: Date, timeZone: string): Record<string, string> {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -43,7 +43,7 @@ function dayBefore(day: string): string {
 
 /** A date with no zone names no single day in the run's zone, so it counts as unreadable rather than as a guess. */
 function readInstant(pubDate: string | undefined): Date | null {
-  if (!pubDate || !ENDS_IN_A_ZONE.test(pubDate)) return null;
+  if (!pubDate || !TIME_WITH_A_ZONE.test(pubDate)) return null;
   const at = new Date(pubDate);
   return Number.isNaN(at.getTime()) ? null : at;
 }
@@ -69,12 +69,12 @@ function selectYesterday(all: FeedItem[], untitled: (string | undefined)[], limi
   if (!oldest) notes.push(`The feed holds no article with a readable date, so it cannot show what was published on ${windowDay}.`);
   else if (!dated.some((entry) => entry.day < windowDay)) notes.push(`The feed reaches back only to ${localMinute(oldest, windowZone)}, so ${windowDay} may be incomplete.`);
   if (inDay.length > limit) notes.push(`Only the first ${limit} of ${inDay.length} articles from ${windowDay} are included.`);
-  if (undated > 0 && oldest) notes.push(`${countOf(undated, "article")} without a readable date ${undated === 1 ? "was" : "were"} left out.`);
+  if (undated > 0 && oldest) notes.push(leftOut(undated, "without a readable date"));
   const untitledInDay = untitled.filter((pubDate) => {
     const at = readInstant(pubDate);
     return at && localDay(at, windowZone) === windowDay;
   }).length;
-  if (untitledInDay > 0) notes.push(`${countOf(untitledInDay, "article")} from ${windowDay} without a title ${untitledInDay === 1 ? "was" : "were"} left out.`);
+  if (untitledInDay > 0) notes.push(leftOut(untitledInDay, `from ${windowDay} without a title`));
 
   return {
     items: inDay.slice(0, limit),
@@ -117,9 +117,7 @@ export default {
       const desc = block.match(/<description[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/)?.[1]?.trim()
         || block.match(/<summary[^>]*>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/summary>/)?.[1]?.trim() || "";
       const pubDate = block.match(/<pubDate[^>]*>(.*?)<\/pubDate>/)?.[1]?.trim()
-        || block.match(/<published[^>]*>(.*?)<\/published>/)?.[1]?.trim()
-        || block.match(/<dc:date[^>]*>(.*?)<\/dc:date>/)?.[1]?.trim()
-        || block.match(/<updated[^>]*>(.*?)<\/updated>/)?.[1]?.trim();
+        || block.match(/<published[^>]*>(.*?)<\/published>/)?.[1]?.trim();
 
       if (title) {
         items.push({
