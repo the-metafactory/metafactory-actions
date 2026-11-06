@@ -106,6 +106,9 @@ export interface ActionContext {
   /** Injected capabilities based on action's requirements */
   capabilities: ActionCapabilities;
 
+  /** The run's clock and zone: the same ones the run's prompts state as today and yesterday. Absent when the runtime gives none. */
+  run?: { startedAt: Date; timeZone?: string };
+
   /** Execution environment */
   env: {
     mode: "local" | "cloud";

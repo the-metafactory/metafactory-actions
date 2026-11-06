@@ -32,7 +32,8 @@ Actions are independent, composable units. Each has an `action.json` manifest an
 | **A_FORMAT_UPGRADE** | Format arc upgrade results as readable digest | -- |
 | **A_SYNC_REPOS** | Pull latest changes for all metafactory repos | shell |
 | **A_FORMAT_SYNC** | Format sync results as readable digest | -- |
-| **A_FETCH_FEED** | Fetch and parse an RSS feed into items | fetch |
+| **A_FETCH_FEED** | Fetch and parse an RSS feed into items; `window: yesterday` keeps that day's items by code | fetch |
+| **A_WINDOW_NOTICE** | Put what a windowed feed fetch reported into a summary body | -- |
 | **A_EXTRACT_ARTICLE** | Extract article content from feed item URLs | fetch |
 | **A_RATE** | Rate articles for relevance using LLM | llm |
 | **A_RECOMMEND** | Rank rated articles into recommendation digest | llm |
