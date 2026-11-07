@@ -1,0 +1,12 @@
+{
+  "name": "A_FORMAT_MARKDOWN",
+  "version": "1.0.0",
+  "description": "Render a markdown body as an html field, by code, keeping body as the plain text. When a routine mails a summary, put this directly before A_MAIL_SEND, after every step that changes body, so mail clients show headings and bold instead of raw markdown. Raw HTML in the body is escaped, links stay only for http and https, and images become their alt text. It does not send anything.",
+  "input": {
+    "body": { "type": "string", "required": true, "description": "Markdown text" }
+  },
+  "output": {
+    "html": { "type": "string", "description": "The body as inert HTML: formatting elements and http links only" }
+  },
+  "tags": ["format", "markdown", "html"]
+}

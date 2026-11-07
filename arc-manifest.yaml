@@ -1,6 +1,6 @@
 schema: arc/v1
 name: metafactory-actions
-version: 1.5.0
+version: 1.6.0
 type: library
 description: Shared actions and flows for the metafactory ecosystem
 author:
@@ -40,6 +40,8 @@ artifacts:
     description: Fetch and parse an RSS feed into items
   - path: actions/A_WINDOW_NOTICE
     description: Put what a windowed feed fetch reported into a summary body
+  - path: actions/A_FORMAT_MARKDOWN
+    description: Render a markdown body as inert html, keeping body as the plain text
   - path: actions/A_EXTRACT_ARTICLE
     description: Extract article content from feed item URLs
   - path: actions/A_RATE

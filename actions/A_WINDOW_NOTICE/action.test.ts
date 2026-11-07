@@ -31,3 +31,27 @@ describe("A_WINDOW_NOTICE", () => {
     expect(out.subject).toBe("Daily");
   });
 });
+
+describe("A_WINDOW_NOTICE in German", () => {
+  const german = { ...window, language: "de" };
+
+  test("a whole day leads with its date and count", async () => {
+    const out = await action.execute({ ...german, items: [{}, {}], body: "- eins\n- zwei\n" }, context);
+    expect(out.body).toBe("2 Artikel vom 2026-11-05 (Europe/Zurich).\n\n- eins\n- zwei\n");
+  });
+
+  test("one article", async () => {
+    const out = await action.execute({ ...german, items: [{}], body: "- eins" }, context);
+    expect(out.body).toBe("1 Artikel vom 2026-11-05 (Europe/Zurich).\n\n- eins\n");
+  });
+
+  test("an empty window drops whatever the model wrote", async () => {
+    const out = await action.execute({ ...german, items: [], body: "- Erfunden" }, context);
+    expect(out.body).toBe("Keine Artikel vom 2026-11-05 (Europe/Zurich) gefunden.\n");
+  });
+
+  test("a language it has no words for keeps the English default", async () => {
+    const out = await action.execute({ ...window, language: "fr", items: [{}], body: "- one" }, context);
+    expect(out.body).toBe("1 article from 2026-11-05 (Europe/Zurich).\n\n- one\n");
+  });
+});

@@ -1,13 +1,14 @@
 {
   "name": "A_WINDOW_NOTICE",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Put what a windowed A_FETCH_FEED reported into a summary body, by code. Run it after the step that writes body and before the step that delivers it. With no items in the window, the body becomes a plain statement and any model text is dropped. Otherwise the body starts with the day, the article count and anything missing from the day.",
   "input": {
     "body": { "type": "string", "required": true },
     "items": { "type": "array", "required": true },
     "windowDay": { "type": "string", "required": true },
     "windowZone": { "type": "string", "required": true },
-    "windowNote": { "type": "string", "required": true }
+    "windowNote": { "type": "string", "required": true },
+    "language": { "type": "string", "required": false, "description": "Optional. \"de\" writes the day and count line in German; anything else keeps English" }
   },
   "output": {
     "body": { "type": "string" }
