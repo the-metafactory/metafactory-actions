@@ -4,6 +4,7 @@
   "type": "module",
   "description": "Shared actions and flows for the metafactory ecosystem. The scan engine and shared parsers are dependency-free; `yaml` is a pre-existing runtime import of the A_BLUEPRINT_STATUS action, now declared.",
   "dependencies": {
+    "marked": "14.1.4",
     "yaml": "^2.5.0"
   },
   "devDependencies": {
